@@ -139,7 +139,7 @@ function ItemCard({ item, onUpdate, onDelete }) {
   }
 
   async function increment() {
-    try { const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ quantity: item.quantity + 1 }) }); onUpdate(updated); }
+    try { const updated = await apiFetch(`/items/${item.id}/increment`, { method: "PATCH", body: JSON.stringify({ amount: 1 }) }); onUpdate(updated); }
     catch (e) { alert(e.message); }
   }
 
