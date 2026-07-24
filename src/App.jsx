@@ -28,7 +28,7 @@ function Modal({ title, onClose, children }) {
       <div style={{ background: "#13131a", borderRadius: "16px 16px 0 0", width: "100%", maxWidth: 600, maxHeight: "90vh", overflow: "auto", padding: "20px 20px 40px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{title}</div>
-          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer" }}>✕</button>
+          <button aria-label="Close dialog" onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer" }}>✕</button>
         </div>
         {children}
       </div>
@@ -184,9 +184,9 @@ function ItemCard({ item, onUpdate, onDelete }) {
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
                 {/* Quantity controls */}
-                <button onClick={decrement} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 6, width: 28, height: 28, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
+                <button aria-label="Decrease quantity" onClick={decrement} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 6, width: 28, height: 28, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
                 <span style={{ fontSize: 16, fontWeight: 700, color: statusColor, fontFamily: "monospace", minWidth: 20, textAlign: "center" }}>{item.quantity}</span>
-                <button onClick={increment}
+                <button aria-label="Increase quantity" onClick={increment}
                   style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 6, width: 28, height: 28, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
               </div>
             </div>
