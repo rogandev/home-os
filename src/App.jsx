@@ -138,6 +138,11 @@ function ItemCard({ item, onUpdate, onDelete }) {
     catch (e) { alert(e.message); }
   }
 
+  async function increment() {
+    try { const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ quantity: item.quantity + 1 }) }); onUpdate(updated); }
+    catch (e) { alert(e.message); }
+  }
+
   async function setStatus(status) {
     try { const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ status }) }); onUpdate(updated); setShowActions(false); }
     catch (e) { alert(e.message); }
@@ -181,7 +186,7 @@ function ItemCard({ item, onUpdate, onDelete }) {
                 {/* Quantity controls */}
                 <button onClick={decrement} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 6, width: 28, height: 28, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>−</button>
                 <span style={{ fontSize: 16, fontWeight: 700, color: statusColor, fontFamily: "monospace", minWidth: 20, textAlign: "center" }}>{item.quantity}</span>
-                <button onClick={() => { onUpdate({ ...item, quantity: item.quantity + 1 }); apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ quantity: item.quantity + 1 }) }).then(onUpdate); }}
+                <button onClick={increment}
                   style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 6, width: 28, height: 28, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>+</button>
               </div>
             </div>
