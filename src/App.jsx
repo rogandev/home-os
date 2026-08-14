@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:3000/home-os";
+const API_TOKEN = import.meta.env.VITE_API_TOKEN;
 
 const CATEGORIES = ["Skin Care", "Hair Care", "Personal Care", "Cleaning Supplies"];
 const LOCATIONS  = ["Kiehl's Bag", "Walk-in Closet", "Kitchen"];
@@ -12,8 +13,12 @@ const CAT_COLOR    = { "Skin Care": "#818cf8", "Hair Care": "#06b6d4", "Personal
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${API_TOKEN}`,
+      ...options.headers,
+    },
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
