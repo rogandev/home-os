@@ -14,8 +14,12 @@ const CAT_COLOR    = { "Skin Care": "#818cf8", "Hair Care": "#06b6d4", "Personal
 
 async function apiFetch(path, options = {}) {
   const res = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_TOKEN}` },
     ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+      ...(options.headers || {}),
+    },
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
