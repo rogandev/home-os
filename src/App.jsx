@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 
-const API = import.meta.env.VITE_API_URL || "http://localhost:3000/home-os";
-const API_TOKEN = import.meta.env.VITE_API_TOKEN;
+const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\\/+$/, "");
+const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\\/+$/, "");
+const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_API_TOKEN || "";
 
 const CATEGORIES = ["Skin Care", "Hair Care", "Personal Care", "Cleaning Supplies"];
 const LOCATIONS  = ["Kiehl's Bag", "Walk-in Closet", "Kitchen"];
