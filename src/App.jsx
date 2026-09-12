@@ -27,12 +27,12 @@ async function apiFetch(path, options = {}) {
 
 function Modal({ title, onClose, children }) {
   return (
-    <div onClick={e => e.target === e.currentTarget && onClose()}
+    <div role="dialog" aria-modal="true" aria-label={title} onClick={e => e.target === e.currentTarget && onClose()}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
       <div style={{ background: "#13131a", borderRadius: "16px 16px 0 0", width: "100%", maxWidth: 600, maxHeight: "90vh", overflowY: "auto", padding: "20px 20px 40px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{title}</div>
-          <button onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer" }}>✕</button>
+          <button aria-label={`Close ${title}`} onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer" }}>✕</button>
         </div>
         {children}
       </div>
@@ -68,12 +68,23 @@ function ItemForm({ initial = {}, onSave, onClose }) {
     size: "", form: "", quantity: 1, reorder_at: 1, notes: "", ...initial,
   });
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   async function handleSave() {
-    if (!form.name.trim()) return alert("Name is required");
+    if (!form.name.trim()) {
+      setSaveError("Give this item a name before saving.");
+      return;
+    }
+    setSaveError("");
     setSaving(true);
-    try { await onSave(form); } finally { setSaving(false); }
+    try {
+      await onSave(form);
+    } catch (error) {
+      setSaveError(error.message || "The item could not be saved.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -97,6 +108,11 @@ function ItemForm({ initial = {}, onSave, onClose }) {
         <Field label="REORDER AT (DEFAULT: 1)"><input style={inputStyle} type="number" min={0} value={form.reorder_at} onChange={e => set("reorder_at", Number(e.target.value))} /></Field>
       </div>
       <Field label="NOTES"><input style={inputStyle} value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Optional notes" /></Field>
+      {saveError && (
+        <div role="alert" style={{ padding: "9px 11px", borderRadius: 8, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#fca5a5", fontSize: 11, fontFamily: "monospace" }}>
+          {saveError}
+        </div>
+      )}
       <button onClick={handleSave} disabled={saving} style={{
         marginTop: 8, background: "#818cf8", color: "#000", border: "none", borderRadius: 10,
         padding: "12px", fontSize: 13, fontFamily: "monospace", fontWeight: 700,
@@ -110,6 +126,10 @@ function ItemCard({ item, onUpdate, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [showReceive, setShowReceive] = useState(false);
   const [receivedQty, setReceivedQty] = useState("");
+  const [showAdjust, setShowAdjust] = useState(false);
+  const [adjustedQty, setAdjustedQty] = useState(String(item.quantity));
+  const [working, setWorking] = useState(false);
+  const [actionError, setActionError] = useState("");
 
   const statusColor = STATUS_COLOR[item.status] || "#fff";
   const catColor = CAT_COLOR[item.category] || "#fff";
@@ -117,32 +137,66 @@ function ItemCard({ item, onUpdate, onDelete }) {
   const isAwaiting = item.status === "awaiting_shipment";
 
   async function decrement() {
+    if (working || item.quantity <= 0) return;
+    setWorking(true);
+    setActionError("");
     try {
       const updated = await apiFetch(`/items/${item.id}/decrement`, { method: "PATCH", body: JSON.stringify({ amount: 1 }) });
       onUpdate(updated);
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      setActionError(e.message || "Quantity could not be updated.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function increment() {
+    if (working) return;
+    setWorking(true);
+    setActionError("");
     try {
       const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ quantity: item.quantity + 1 }) });
       onUpdate(updated);
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      setActionError(e.message || "Quantity could not be updated.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function setStatus(status) {
+    setActionError("");
     try {
       const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
       onUpdate(updated);
-    } catch (e) { alert(e.message); }
+    } catch (e) { setActionError(e.message || "Status could not be updated."); }
   }
 
   async function handleReceive() {
-    if (!receivedQty) return;
+    const quantity = Number(receivedQty);
+    if (!Number.isInteger(quantity) || quantity < 0) {
+      setActionError("Quantity must be a whole number of zero or more.");
+      return;
+    }
     try {
-      const updated = await apiFetch(`/items/${item.id}/received`, { method: "PATCH", body: JSON.stringify({ quantity: Number(receivedQty) }) });
+      const updated = await apiFetch(`/items/${item.id}/received`, { method: "PATCH", body: JSON.stringify({ quantity }) });
       onUpdate(updated); setShowReceive(false); setReceivedQty("");
-    } catch (e) { alert(e.message); }
+      setActionError("");
+    } catch (e) { setActionError(e.message || "Stock receipt could not be recorded."); }
+  }
+
+  async function handleAdjust() {
+    const quantity = Number(adjustedQty);
+    if (!Number.isInteger(quantity) || quantity < 0) {
+      setActionError("Quantity must be a whole number of zero or more.");
+      return;
+    }
+    try {
+      const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ quantity }) });
+      onUpdate(updated);
+      setShowAdjust(false);
+      setActionError("");
+    } catch (e) { setActionError(e.message || "Quantity could not be corrected."); }
   }
 
   async function handleEdit(form) {
@@ -153,9 +207,9 @@ function ItemCard({ item, onUpdate, onDelete }) {
   }
 
   async function handleDelete() {
-    if (!window.confirm(`Delete "${item.name}"?`)) return;
+    if (!window.confirm(`Permanently delete "${item.name}"? This cannot be undone.`)) return;
     try { await apiFetch(`/items/${item.id}`, { method: "DELETE" }); onDelete(item.id); }
-    catch (e) { alert(e.message); }
+    catch (e) { setActionError(e.message || "Item could not be deleted."); }
   }
 
   return (
@@ -163,7 +217,7 @@ function ItemCard({ item, onUpdate, onDelete }) {
       <div style={{
         background: isLow ? "rgba(248,113,113,0.06)" : isAwaiting ? "rgba(250,204,21,0.06)" : "rgba(255,255,255,0.03)",
         border: `1px solid ${isLow ? "rgba(248,113,113,0.2)" : isAwaiting ? "rgba(250,204,21,0.2)" : "rgba(255,255,255,0.07)"}`,
-        borderRadius: 12, padding: "12px 14px",
+        borderRadius: 12, padding: "12px 14px", contentVisibility: "auto", containIntrinsicSize: "150px",
       }}>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
           <div style={{ width: 3, height: 40, borderRadius: 2, background: catColor, flexShrink: 0, marginTop: 2 }} />
@@ -173,10 +227,9 @@ function ItemCard({ item, onUpdate, onDelete }) {
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", lineHeight: 1.3 }}>{item.name}</div>
                 {item.brand && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontFamily: "monospace", marginTop: 1 }}>{item.brand}</div>}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
-                <button onClick={decrement} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 6, width: 28, height: 28, fontSize: 16, cursor: "pointer" }}>−</button>
-                <span style={{ fontSize: 16, fontWeight: 700, color: statusColor, fontFamily: "monospace", minWidth: 20, textAlign: "center" }}>{item.quantity}</span>
-                <button onClick={increment} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 6, width: 28, height: 28, fontSize: 16, cursor: "pointer" }}>+</button>
+              <div aria-label={`${item.quantity} units in stock`} style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+                <span style={{ fontSize: 18, fontWeight: 750, color: statusColor, fontFamily: "monospace", minWidth: 20, textAlign: "right" }}>{item.quantity}</span>
+                <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>units</span>
               </div>
             </div>
 
@@ -190,24 +243,34 @@ function ItemCard({ item, onUpdate, onDelete }) {
             </div>
 
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+              <button disabled={working || item.quantity <= 0} aria-label={`Use one ${item.name}`} onClick={decrement} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(129,140,248,0.14)", border: "1px solid rgba(129,140,248,0.32)", color: "#a5b4fc", borderRadius: 7, cursor: item.quantity <= 0 ? "not-allowed" : "pointer", opacity: working || item.quantity <= 0 ? 0.45 : 1, fontFamily: "monospace", fontWeight: 700 }}>
+                Use 1
+              </button>
+              <button disabled={working} aria-label={`Add one ${item.name}`} onClick={increment} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.72)", borderRadius: 7, cursor: "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
+                +1
+              </button>
+              <button onClick={() => { setActionError(""); setAdjustedQty(String(item.quantity)); setShowAdjust(true); }} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.55)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
+                Adjust
+              </button>
               {item.status === "normal" && (
-                <button onClick={() => setStatus("need_to_order")} style={{ fontSize: 10, padding: "4px 8px", background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171", borderRadius: 6, cursor: "pointer", fontFamily: "monospace" }}>
+                <button onClick={() => setStatus("need_to_order")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.2)", color: "#f87171", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
                   Need to Order
                 </button>
               )}
               {item.status === "need_to_order" && (
-                <button onClick={() => setStatus("awaiting_shipment")} style={{ fontSize: 10, padding: "4px 8px", background: "rgba(250,204,21,0.15)", border: "1px solid rgba(250,204,21,0.3)", color: "#facc15", borderRadius: 6, cursor: "pointer", fontFamily: "monospace" }}>
+                <button onClick={() => setStatus("awaiting_shipment")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(250,204,21,0.15)", border: "1px solid rgba(250,204,21,0.3)", color: "#facc15", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
                   Mark Ordered →
                 </button>
               )}
               {item.status === "awaiting_shipment" && (
-                <button onClick={() => setShowReceive(true)} style={{ fontSize: 10, padding: "4px 8px", background: "rgba(74,222,128,0.15)", border: "1px solid rgba(74,222,128,0.3)", color: "#4ade80", borderRadius: 6, cursor: "pointer", fontFamily: "monospace" }}>
+                <button onClick={() => { setActionError(""); setShowReceive(true); }} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(74,222,128,0.15)", border: "1px solid rgba(74,222,128,0.3)", color: "#4ade80", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
                   Mark Received →
                 </button>
               )}
-              <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "4px 8px", background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.4)", borderRadius: 6, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
-              <button onClick={handleDelete} style={{ fontSize: 10, padding: "4px 8px", background: "rgba(255,0,0,0.06)", border: "1px solid rgba(255,0,0,0.12)", color: "rgba(255,80,80,0.5)", borderRadius: 6, cursor: "pointer", fontFamily: "monospace" }}>Delete</button>
+              <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
+              <button onClick={handleDelete} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "transparent", border: "1px solid rgba(248,113,113,0.15)", color: "rgba(248,113,113,0.58)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Delete permanently</button>
             </div>
+            {actionError && <div role="alert" style={{ marginTop: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{actionError}</div>}
           </div>
         </div>
       </div>
@@ -220,8 +283,24 @@ function ItemCard({ item, onUpdate, onDelete }) {
           <Field label="NEW QUANTITY">
             <input style={inputStyle} type="number" min={0} value={receivedQty} onChange={e => setReceivedQty(e.target.value)} autoFocus placeholder="e.g. 3" />
           </Field>
+          {actionError && <div role="alert" style={{ marginBottom: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{actionError}</div>}
           <button onClick={handleReceive} style={{ width: "100%", background: "#4ade80", color: "#000", border: "none", borderRadius: 10, padding: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
             Confirm Receipt
+          </button>
+        </Modal>
+      )}
+
+      {showAdjust && (
+        <Modal title="Correct Quantity" onClose={() => setShowAdjust(false)}>
+          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "monospace", marginBottom: 14 }}>
+            Set the current quantity for <span style={{ color: "#fff" }}>{item.name}</span>. Use this to correct inventory counts; use <strong>Use 1</strong> for normal consumption.
+          </div>
+          <Field label="CURRENT QUANTITY">
+            <input style={inputStyle} type="number" min={0} step={1} value={adjustedQty} onChange={e => setAdjustedQty(e.target.value)} autoFocus />
+          </Field>
+          {actionError && <div role="alert" style={{ marginBottom: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{actionError}</div>}
+          <button onClick={handleAdjust} style={{ width: "100%", background: "#818cf8", color: "#000", border: "none", borderRadius: 10, padding: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
+            Save Quantity
           </button>
         </Modal>
       )}
@@ -291,6 +370,14 @@ export default function HomeOS() {
     return i.name.toLowerCase().includes(search.toLowerCase()) ||
            (i.brand || "").toLowerCase().includes(search.toLowerCase());
   });
+  const hasFilters = Boolean(search) || filterCat !== "all" || filterLoc !== "all" || filterStatus !== "all";
+
+  function clearFilters() {
+    setSearch("");
+    setFilterCat("all");
+    setFilterLoc("all");
+    setFilterStatus("all");
+  }
 
   const needToOrder = items.filter(i => i.status === "need_to_order");
   const awaitingShipment = items.filter(i => i.status === "awaiting_shipment");
@@ -390,25 +477,35 @@ export default function HomeOS() {
         {tab === "inventory" && (
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
-              <input value={search} onChange={e => setSearch(e.target.value)}
+              <input aria-label="Search inventory" value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search items or brands..."
                 style={{ ...inputStyle, fontSize: 12 }} />
               <div style={{ display: "flex", gap: 8 }}>
-                <select value={filterCat} onChange={e => setFilterCat(e.target.value)}
+                <select aria-label="Filter by category" value={filterCat} onChange={e => setFilterCat(e.target.value)}
                   style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
                   <option value="all">All Categories</option>
                   {CATEGORIES.map(c => <option key={c} value={c} style={{ background: "#1a1a2e" }}>{c}</option>)}
                 </select>
-                <select value={filterLoc} onChange={e => setFilterLoc(e.target.value)}
+                <select aria-label="Filter by location" value={filterLoc} onChange={e => setFilterLoc(e.target.value)}
                   style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
                   <option value="all">All Locations</option>
                   {LOCATIONS.map(l => <option key={l} value={l} style={{ background: "#1a1a2e" }}>{l}</option>)}
                 </select>
-                <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
+                <select aria-label="Filter by status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
                   style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
                   <option value="all">All Status</option>
                   {STATUSES.map(s => <option key={s} value={s} style={{ background: "#1a1a2e" }}>{STATUS_LABEL[s]}</option>)}
                 </select>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: 24, gap: 12 }}>
+                <span aria-live="polite" style={{ fontSize: 10, color: "rgba(255,255,255,0.32)", fontFamily: "monospace" }}>
+                  Showing {filtered.length} of {items.length} items
+                </span>
+                {hasFilters && (
+                  <button onClick={clearFilters} style={{ fontSize: 10, padding: "4px 8px", background: "transparent", border: "none", color: "#a5b4fc", fontFamily: "monospace", cursor: "pointer" }}>
+                    Clear all filters
+                  </button>
+                )}
               </div>
             </div>
 
@@ -418,7 +515,12 @@ export default function HomeOS() {
             {!loading && !error && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {filtered.length === 0 && (
-                  <div style={{ textAlign: "center", padding: 40, color: "rgba(255,255,255,0.2)", fontFamily: "monospace" }}>No items found</div>
+                  <div style={{ textAlign: "center", padding: 40, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>
+                    <div style={{ fontSize: 14, color: "rgba(255,255,255,0.7)", marginBottom: 8 }}>{items.length === 0 ? "Your inventory is empty" : "No items match these filters"}</div>
+                    <button onClick={items.length === 0 ? () => setAdding(true) : clearFilters} style={{ background: "rgba(129,140,248,0.14)", border: "1px solid rgba(129,140,248,0.3)", color: "#a5b4fc", borderRadius: 8, padding: "8px 12px", fontFamily: "monospace", fontSize: 11 }}>
+                      {items.length === 0 ? "Add your first item" : "Clear filters"}
+                    </button>
+                  </div>
                 )}
                 {filtered.map(item => (
                   <ItemCard key={item.id} item={item} onUpdate={updateItem} onDelete={deleteItem} />
