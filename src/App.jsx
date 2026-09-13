@@ -6,10 +6,10 @@ const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_A
 
 const CATEGORIES = ["Skin Care", "Hair Care", "Personal Care", "Cleaning Supplies"];
 const LOCATIONS  = ["Kiehl's Bag", "Walk-in Closet", "Kitchen"];
-const STATUSES   = ["normal", "need_to_order", "awaiting_shipment"];
+const STATUSES   = ["normal", "need_to_order", "awaiting_shipment", "do_not_order"];
 
-const STATUS_LABEL = { normal: "In Stock", need_to_order: "Need to Order", awaiting_shipment: "Awaiting Shipment" };
-const STATUS_COLOR = { normal: "#4ade80", need_to_order: "#f87171", awaiting_shipment: "#facc15" };
+const STATUS_LABEL = { normal: "In Stock", need_to_order: "Need to Order", awaiting_shipment: "Awaiting Shipment", do_not_order: "Do Not Order" };
+const STATUS_COLOR = { normal: "#4ade80", need_to_order: "#f87171", awaiting_shipment: "#facc15", do_not_order: "#94a3b8" };
 const CAT_COLOR    = { "Skin Care": "#818cf8", "Hair Care": "#06b6d4", "Personal Care": "#f97316", "Cleaning Supplies": "#4ade80" };
 
 async function apiFetch(path, options = {}) {
@@ -135,6 +135,7 @@ function ItemCard({ item, onUpdate, onDelete }) {
   const catColor = CAT_COLOR[item.category] || "#fff";
   const isLow = item.status === "need_to_order";
   const isAwaiting = item.status === "awaiting_shipment";
+  const isDoNotOrder = item.status === "do_not_order";
 
   async function decrement() {
     if (working || item.quantity <= 0) return;
@@ -165,11 +166,17 @@ function ItemCard({ item, onUpdate, onDelete }) {
   }
 
   async function setStatus(status) {
+    if (working) return;
+    setWorking(true);
     setActionError("");
     try {
       const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ status }) });
       onUpdate(updated);
-    } catch (e) { setActionError(e.message || "Status could not be updated."); }
+    } catch (e) {
+      setActionError(e.message || "Status could not be updated.");
+    } finally {
+      setWorking(false);
+    }
   }
 
   async function handleReceive() {
@@ -215,8 +222,8 @@ function ItemCard({ item, onUpdate, onDelete }) {
   return (
     <>
       <div style={{
-        background: isLow ? "rgba(248,113,113,0.06)" : isAwaiting ? "rgba(250,204,21,0.06)" : "rgba(255,255,255,0.03)",
-        border: `1px solid ${isLow ? "rgba(248,113,113,0.2)" : isAwaiting ? "rgba(250,204,21,0.2)" : "rgba(255,255,255,0.07)"}`,
+        background: isLow ? "rgba(248,113,113,0.06)" : isAwaiting ? "rgba(250,204,21,0.06)" : isDoNotOrder ? "rgba(148,163,184,0.05)" : "rgba(255,255,255,0.03)",
+        border: `1px solid ${isLow ? "rgba(248,113,113,0.2)" : isAwaiting ? "rgba(250,204,21,0.2)" : isDoNotOrder ? "rgba(148,163,184,0.18)" : "rgba(255,255,255,0.07)"}`,
         borderRadius: 12, padding: "12px 14px", contentVisibility: "auto", containIntrinsicSize: "150px",
       }}>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -265,6 +272,15 @@ function ItemCard({ item, onUpdate, onDelete }) {
               {item.status === "awaiting_shipment" && (
                 <button onClick={() => { setActionError(""); setShowReceive(true); }} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(74,222,128,0.15)", border: "1px solid rgba(74,222,128,0.3)", color: "#4ade80", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
                   Mark Received →
+                </button>
+              )}
+              {item.status !== "do_not_order" ? (
+                <button disabled={working} aria-label={`Do not reorder ${item.name}`} onClick={() => setStatus("do_not_order")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.2)", color: "#cbd5e1", borderRadius: 7, cursor: working ? "not-allowed" : "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
+                  Do not order
+                </button>
+              ) : (
+                <button disabled={working} aria-label={`Resume ordering ${item.name}`} onClick={() => setStatus(item.quantity <= item.reorder_at ? "need_to_order" : "normal")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.22)", color: "#86efac", borderRadius: 7, cursor: working ? "not-allowed" : "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
+                  Resume ordering
                 </button>
               )}
               <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
@@ -427,6 +443,7 @@ export default function HomeOS() {
               { label: "In Stock", val: stats.in_stock, status: "normal", color: "#4ade80" },
               { label: "Need to Order", val: stats.need_to_order, status: "need_to_order", color: "#f87171" },
               { label: "Awaiting", val: stats.awaiting_shipment, status: "awaiting_shipment", color: "#facc15" },
+              { label: "Do Not Order", val: stats.do_not_order ?? 0, status: "do_not_order", color: "#94a3b8" },
             ].map(({ label, val, status, color }) => {
               const active = filterStatus === status;
               return (
