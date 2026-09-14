@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback } from "react";
 import { editableItemValues, replenishmentPolicyFor } from "./replenishment.js";
+import {
+  allocationPayload,
+  allocationRows,
+  allocationTotal,
+  moveStock,
+  positiveAllocations,
+  setAllocationQuantity,
+} from "./storage.js";
 
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
@@ -28,7 +36,15 @@ async function apiFetch(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const text = await res.text();
+    let details;
+    try { details = JSON.parse(text); } catch { details = null; }
+    const error = new Error(details?.error || text || `Request failed (${res.status})`);
+    error.code = details?.code || res.headers.get("X-Error-Code") || "";
+    error.status = res.status;
+    throw error;
+  }
   return res.json();
 }
 
@@ -144,12 +160,132 @@ function ItemForm({ initial = {}, onSave, onClose }) {
   );
 }
 
-function ItemCard({ item, onUpdate, onDelete }) {
+function StorageModal({ item, allocations, containers, intent, onSave, onClose }) {
+  const [rows, setRows] = useState(() => allocationRows(allocations, containers));
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [moveFrom, setMoveFrom] = useState("");
+  const [moveTo, setMoveTo] = useState("");
+  const [moveAmount, setMoveAmount] = useState("1");
+  const total = allocationTotal(rows);
+  const availableSources = rows.filter(row => row.quantity > 0);
+  const availableDestinations = rows.filter(row => row.isActive);
+
+  function changeQuantity(containerId, value) {
+    try {
+      setRows(current => setAllocationQuantity(current, containerId, value));
+      setError("");
+    } catch (nextError) {
+      setError(nextError.message);
+    }
+  }
+
+  function applyMove() {
+    try {
+      setRows(current => moveStock(current, moveFrom, moveTo, moveAmount));
+      setError("");
+    } catch (nextError) {
+      setError(nextError.message);
+    }
+  }
+
+  async function save() {
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(rows, { markReceived: intent === "receive" });
+      onClose();
+    } catch (nextError) {
+      const message = nextError.code === "HOME_OS_ALLOCATION_REQUIRED"
+        ? "Choose the exact container whose stock changed. Nothing was updated."
+        : nextError.message || "Storage could not be updated.";
+      setError(message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const guidance = intent === "use"
+    ? "Choose the container you used and reduce it by one."
+    : intent === "add"
+      ? "Choose where the new unit was stored and add one."
+      : intent === "receive"
+        ? "Put the received stock in its real container, then save the receipt."
+        : "Set each physical quantity or move stock without changing the combined total.";
+
+  return (
+    <Modal title={`Storage · ${item.name}`} onClose={onClose}>
+      <div style={{ padding: "10px 12px", marginBottom: 12, borderRadius: 9, background: "rgba(129,140,248,0.08)", border: "1px solid rgba(129,140,248,0.2)", color: "#c7d2fe", fontSize: 11, fontFamily: "monospace", lineHeight: 1.5 }}>
+        {guidance}
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {rows.map(row => (
+          <div key={row.containerId} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "center", padding: "10px 11px", borderRadius: 9, background: row.quantity > 0 ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.025)", border: "1px solid rgba(255,255,255,0.08)", opacity: row.isActive ? 1 : 0.65 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ color: "#fff", fontSize: 12, fontWeight: 650 }}>{row.containerName}</div>
+              <div style={{ color: "rgba(255,255,255,0.36)", fontSize: 9, fontFamily: "monospace", marginTop: 2 }}>
+                {row.locationName}{row.isCompatibility ? " · Unassigned compatibility stock" : ""}{!row.isActive ? " · Archived" : ""}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+              <button aria-label={`Remove one from ${row.containerName}`} disabled={row.quantity <= 0 || saving} onClick={() => changeQuantity(row.containerId, row.quantity - 1)} style={{ ...storageStepButton, opacity: row.quantity <= 0 ? 0.35 : 1 }}>−</button>
+              <input aria-label={`${row.containerName} quantity`} type="number" min={0} step={1} value={row.quantity} disabled={!row.isActive || saving} onChange={event => changeQuantity(row.containerId, event.target.value)} style={{ ...inputStyle, width: 58, textAlign: "center", padding: "7px 4px" }} />
+              <button aria-label={`Add one to ${row.containerName}`} disabled={!row.isActive || saving} onClick={() => changeQuantity(row.containerId, row.quantity + 1)} style={storageStepButton}>+</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {availableSources.length > 0 && availableDestinations.length > 1 && (
+        <div style={{ marginTop: 14, padding: 12, borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)" }}>
+          <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontFamily: "monospace", marginBottom: 8 }}>MOVE STOCK — TOTAL STAYS THE SAME</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
+            <select aria-label="Move stock from" value={moveFrom} onChange={event => setMoveFrom(event.target.value)} style={{ ...inputStyle, appearance: "none", fontSize: 10 }}>
+              <option value="">From container…</option>
+              {availableSources.map(row => <option key={row.containerId} value={row.containerId}>{row.containerName} ({row.quantity})</option>)}
+            </select>
+            <select aria-label="Move stock to" value={moveTo} onChange={event => setMoveTo(event.target.value)} style={{ ...inputStyle, appearance: "none", fontSize: 10 }}>
+              <option value="">To container…</option>
+              {availableDestinations.map(row => <option key={row.containerId} value={row.containerId}>{row.containerName}</option>)}
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 7, marginTop: 7 }}>
+            <input aria-label="Move quantity" type="number" min={1} step={1} value={moveAmount} onChange={event => setMoveAmount(event.target.value)} style={{ ...inputStyle, flex: 1 }} />
+            <button onClick={applyMove} style={{ padding: "8px 13px", borderRadius: 8, border: "1px solid rgba(129,140,248,0.35)", background: "rgba(129,140,248,0.14)", color: "#c7d2fe", fontFamily: "monospace", fontSize: 10 }}>Apply move</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, padding: "10px 0", borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+        <span style={{ fontSize: 10, color: "rgba(255,255,255,0.42)", fontFamily: "monospace" }}>COMBINED ON HAND</span>
+        <strong aria-live="polite" style={{ color: total === item.quantity ? "#4ade80" : "#facc15", fontFamily: "monospace", fontSize: 18 }}>{total} units</strong>
+      </div>
+      {total !== item.quantity && intent === "manage" && (
+        <div style={{ marginBottom: 10, color: "#facc15", fontSize: 10, fontFamily: "monospace" }}>Saving will correct the item total from {item.quantity} to {total}.</div>
+      )}
+      {error && <div role="alert" style={{ marginBottom: 10, padding: "9px 11px", borderRadius: 8, background: "rgba(248,113,113,0.1)", color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{error}</div>}
+      <button onClick={save} disabled={saving} style={{ width: "100%", border: "none", borderRadius: 10, padding: 12, background: intent === "receive" ? "#4ade80" : "#818cf8", color: "#000", fontFamily: "monospace", fontWeight: 750, opacity: saving ? 0.6 : 1 }}>
+        {saving ? "Saving…" : intent === "receive" ? "Save Receipt" : "Save Storage"}
+      </button>
+    </Modal>
+  );
+}
+
+const storageStepButton = {
+  width: 32,
+  height: 32,
+  borderRadius: 7,
+  border: "1px solid rgba(255,255,255,0.12)",
+  background: "rgba(255,255,255,0.06)",
+  color: "#fff",
+  fontSize: 16,
+};
+
+function ItemCard({ item, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onReload }) {
   const [editing, setEditing] = useState(false);
-  const [showReceive, setShowReceive] = useState(false);
-  const [receivedQty, setReceivedQty] = useState("");
-  const [showAdjust, setShowAdjust] = useState(false);
-  const [adjustedQty, setAdjustedQty] = useState(String(item.quantity));
+  const [showStorage, setShowStorage] = useState(false);
+  const [storageIntent, setStorageIntent] = useState("manage");
   const [working, setWorking] = useState(false);
   const [actionError, setActionError] = useState("");
 
@@ -159,14 +295,39 @@ function ItemCard({ item, onUpdate, onDelete }) {
   const isLow = item.status === "need_to_order";
   const isAwaiting = item.status === "awaiting_shipment";
   const isDoNotOrder = replenishmentPolicy === "do_not_order";
+  const rows = allocationRows(allocations, containers);
+  const stored = positiveAllocations(rows);
 
-  async function decrement() {
-    if (working || item.quantity <= 0) return;
+  function openStorage(intent = "manage") {
+    setActionError("");
+    if (allocationError) {
+      setActionError("Storage details are unavailable. Reload before changing stock.");
+      return;
+    }
+    setStorageIntent(intent);
+    setShowStorage(true);
+  }
+
+  async function saveAllocations(nextRows, options = {}) {
+    return onReplaceAllocations(item, nextRows, options);
+  }
+
+  async function changeSingleAllocation(delta) {
+    if (working) return;
+    if (allocationError) {
+      setActionError("Storage details are unavailable. Reload before changing stock.");
+      return;
+    }
+    if (stored.length !== 1 || !stored[0].isActive) {
+      openStorage(delta < 0 ? "use" : "add");
+      return;
+    }
+    if (delta < 0 && stored[0].quantity <= 0) return;
     setWorking(true);
     setActionError("");
     try {
-      const updated = await apiFetch(`/items/${item.id}/decrement`, { method: "PATCH", body: JSON.stringify({ amount: 1 }) });
-      onUpdate(updated);
+      const nextRows = setAllocationQuantity(rows, stored[0].containerId, Math.max(0, stored[0].quantity + delta));
+      await saveAllocations(nextRows);
     } catch (e) {
       setActionError(e.message || "Quantity could not be updated.");
     } finally {
@@ -174,18 +335,13 @@ function ItemCard({ item, onUpdate, onDelete }) {
     }
   }
 
+  async function decrement() {
+    if (working || item.quantity <= 0) return;
+    await changeSingleAllocation(-1);
+  }
+
   async function increment() {
-    if (working) return;
-    setWorking(true);
-    setActionError("");
-    try {
-      const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ quantity: item.quantity + 1 }) });
-      onUpdate(updated);
-    } catch (e) {
-      setActionError(e.message || "Quantity could not be updated.");
-    } finally {
-      setWorking(false);
-    }
+    await changeSingleAllocation(1);
   }
 
   async function setStatus(status) {
@@ -214,33 +370,6 @@ function ItemCard({ item, onUpdate, onDelete }) {
     } finally {
       setWorking(false);
     }
-  }
-
-  async function handleReceive() {
-    const quantity = Number(receivedQty);
-    if (!Number.isInteger(quantity) || quantity < 0) {
-      setActionError("Quantity must be a whole number of zero or more.");
-      return;
-    }
-    try {
-      const updated = await apiFetch(`/items/${item.id}/received`, { method: "PATCH", body: JSON.stringify({ quantity }) });
-      onUpdate(updated); setShowReceive(false); setReceivedQty("");
-      setActionError("");
-    } catch (e) { setActionError(e.message || "Stock receipt could not be recorded."); }
-  }
-
-  async function handleAdjust() {
-    const quantity = Number(adjustedQty);
-    if (!Number.isInteger(quantity) || quantity < 0) {
-      setActionError("Quantity must be a whole number of zero or more.");
-      return;
-    }
-    try {
-      const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ quantity }) });
-      onUpdate(updated);
-      setShowAdjust(false);
-      setActionError("");
-    } catch (e) { setActionError(e.message || "Quantity could not be corrected."); }
   }
 
   async function handleEdit(form) {
@@ -279,13 +408,32 @@ function ItemCard({ item, onUpdate, onDelete }) {
 
             <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
               <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: `${catColor}20`, color: catColor, fontFamily: "monospace" }}>{item.category}</span>
-              <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.4)", fontFamily: "monospace" }}>{item.location}</span>
               {item.size && <span style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "monospace" }}>{item.size}</span>}
               {replenishmentPolicy === "auto_replenish" && <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: "rgba(129,140,248,0.12)", color: "#a5b4fc", fontFamily: "monospace" }}>{REPLENISHMENT_LABEL[replenishmentPolicy]}</span>}
               <span style={{ marginLeft: "auto", fontSize: 9, padding: "2px 7px", borderRadius: 4, background: `${statusColor}20`, color: statusColor, fontFamily: "monospace", fontWeight: 600 }}>
                 {STATUS_LABEL[item.status]}
               </span>
             </div>
+
+            <button disabled={allocationError} onClick={() => openStorage("manage")} aria-label={`Manage storage for ${item.name}`} style={{ width: "100%", marginTop: 8, padding: "8px 9px", textAlign: "left", borderRadius: 8, border: "1px solid rgba(129,140,248,0.18)", background: "rgba(129,140,248,0.06)", color: "inherit", opacity: allocationError ? 0.65 : 1 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 9, fontFamily: "monospace", letterSpacing: "0.08em", color: "rgba(255,255,255,0.35)" }}>STORED IN</span>
+                <span style={{ fontSize: 9, fontFamily: "monospace", color: "#a5b4fc" }}>Manage →</span>
+              </div>
+              {allocationError ? (
+                <div style={{ fontSize: 11, marginTop: 4, color: "#fca5a5" }}>Storage unavailable · reload before editing</div>
+              ) : stored.length === 0 ? (
+                <div style={{ fontSize: 11, marginTop: 4, color: "#facc15" }}>No container allocation · {item.location}</div>
+              ) : (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
+                  {stored.map(row => (
+                    <span key={row.containerId} style={{ padding: "3px 7px", borderRadius: 5, background: "rgba(255,255,255,0.06)", color: row.isCompatibility ? "#cbd5e1" : "#fff", fontSize: 10, fontFamily: "monospace" }}>
+                      {row.containerName} · {row.locationName} · {row.quantity}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </button>
 
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
               <button disabled={working || item.quantity <= 0} aria-label={`Use one ${item.name}`} onClick={decrement} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(129,140,248,0.14)", border: "1px solid rgba(129,140,248,0.32)", color: "#a5b4fc", borderRadius: 7, cursor: item.quantity <= 0 ? "not-allowed" : "pointer", opacity: working || item.quantity <= 0 ? 0.45 : 1, fontFamily: "monospace", fontWeight: 700 }}>
@@ -294,7 +442,7 @@ function ItemCard({ item, onUpdate, onDelete }) {
               <button disabled={working} aria-label={`Add one ${item.name}`} onClick={increment} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.72)", borderRadius: 7, cursor: "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
                 +1
               </button>
-              <button onClick={() => { setActionError(""); setAdjustedQty(String(item.quantity)); setShowAdjust(true); }} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.55)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
+              <button onClick={() => openStorage("manage")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.55)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
                 Adjust
               </button>
               {item.status === "normal" && (
@@ -308,7 +456,7 @@ function ItemCard({ item, onUpdate, onDelete }) {
                 </button>
               )}
               {item.status === "awaiting_shipment" && (
-                <button onClick={() => { setActionError(""); setShowReceive(true); }} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(74,222,128,0.15)", border: "1px solid rgba(74,222,128,0.3)", color: "#4ade80", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
+                <button onClick={() => openStorage("receive")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(74,222,128,0.15)", border: "1px solid rgba(74,222,128,0.3)", color: "#4ade80", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>
                   Mark Received →
                 </button>
               )}
@@ -324,39 +472,24 @@ function ItemCard({ item, onUpdate, onDelete }) {
               <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
               <button onClick={handleDelete} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "transparent", border: "1px solid rgba(248,113,113,0.15)", color: "rgba(248,113,113,0.58)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Delete permanently</button>
             </div>
-            {actionError && <div role="alert" style={{ marginTop: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{actionError}</div>}
+            {actionError && (
+              <div role="alert" style={{ marginTop: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>
+                {actionError} {allocationError && <button onClick={onReload} style={{ marginLeft: 5, border: 0, background: "transparent", color: "#c7d2fe", fontFamily: "monospace", textDecoration: "underline" }}>Reload</button>}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
-      {showReceive && (
-        <Modal title="Mark as Received" onClose={() => setShowReceive(false)}>
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "monospace", marginBottom: 14 }}>
-            New quantity for <span style={{ color: "#fff" }}>{item.name}</span>
-          </div>
-          <Field label="NEW QUANTITY">
-            <input style={inputStyle} type="number" min={0} value={receivedQty} onChange={e => setReceivedQty(e.target.value)} autoFocus placeholder="e.g. 3" />
-          </Field>
-          {actionError && <div role="alert" style={{ marginBottom: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{actionError}</div>}
-          <button onClick={handleReceive} style={{ width: "100%", background: "#4ade80", color: "#000", border: "none", borderRadius: 10, padding: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
-            Confirm Receipt
-          </button>
-        </Modal>
-      )}
-
-      {showAdjust && (
-        <Modal title="Correct Quantity" onClose={() => setShowAdjust(false)}>
-          <div style={{ fontSize: 13, color: "rgba(255,255,255,0.5)", fontFamily: "monospace", marginBottom: 14 }}>
-            Set the current quantity for <span style={{ color: "#fff" }}>{item.name}</span>. Use this to correct inventory counts; use <strong>Use 1</strong> for normal consumption.
-          </div>
-          <Field label="CURRENT QUANTITY">
-            <input style={inputStyle} type="number" min={0} step={1} value={adjustedQty} onChange={e => setAdjustedQty(e.target.value)} autoFocus />
-          </Field>
-          {actionError && <div role="alert" style={{ marginBottom: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{actionError}</div>}
-          <button onClick={handleAdjust} style={{ width: "100%", background: "#818cf8", color: "#000", border: "none", borderRadius: 10, padding: 12, fontSize: 13, fontFamily: "monospace", fontWeight: 700, cursor: "pointer", marginTop: 8 }}>
-            Save Quantity
-          </button>
-        </Modal>
+      {showStorage && (
+        <StorageModal
+          item={item}
+          allocations={allocations}
+          containers={containers}
+          intent={storageIntent}
+          onSave={saveAllocations}
+          onClose={() => setShowStorage(false)}
+        />
       )}
 
       {editing && (
@@ -370,6 +503,10 @@ function ItemCard({ item, onUpdate, onDelete }) {
 
 export default function HomeOS() {
   const [items, setItems] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [containers, setContainers] = useState([]);
+  const [allocationsByItem, setAllocationsByItem] = useState({});
+  const [allocationErrors, setAllocationErrors] = useState({});
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -382,23 +519,34 @@ export default function HomeOS() {
 
   const loadAll = useCallback(async () => {
     try {
-      const params = new URLSearchParams();
-      if (filterCat !== "all") params.set("category", filterCat);
-      if (filterLoc !== "all") params.set("location", filterLoc);
-      if (filterStatus !== "all") params.set("status", filterStatus);
-      const [data, statsData] = await Promise.all([
-        apiFetch(`/items?${params}`),
+      const [data, statsData, locationData, containerData] = await Promise.all([
+        apiFetch("/items"),
         apiFetch("/stats"),
+        apiFetch("/locations"),
+        apiFetch("/containers"),
       ]);
+      const allocationResults = await Promise.allSettled(
+        data.map(item => apiFetch(`/items/${item.id}/stock-allocations`)),
+      );
+      const nextAllocations = {};
+      const nextAllocationErrors = {};
+      data.forEach((item, index) => {
+        nextAllocations[item.id] = allocationResults[index].status === "fulfilled" ? allocationResults[index].value : [];
+        if (allocationResults[index].status === "rejected") nextAllocationErrors[item.id] = true;
+      });
       setItems(data);
       setStats(statsData);
+      setLocations(locationData);
+      setContainers(containerData);
+      setAllocationsByItem(nextAllocations);
+      setAllocationErrors(nextAllocationErrors);
       setError(null);
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
-  }, [filterCat, filterLoc, filterStatus]);
+  }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -409,20 +557,58 @@ export default function HomeOS() {
 
   function deleteItem(id) {
     setItems(prev => prev.filter(i => i.id !== id));
+    setAllocationsByItem(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setAllocationErrors(prev => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     apiFetch("/stats").then(setStats).catch(() => {});
   }
 
   async function addItem(form) {
     const created = await apiFetch("/items", { method: "POST", body: JSON.stringify(form) });
+    const allocations = await apiFetch(`/items/${created.id}/stock-allocations`);
     setItems(prev => [created, ...prev]);
+    setAllocationsByItem(prev => ({ ...prev, [created.id]: allocations }));
+    setAllocationErrors(prev => ({ ...prev, [created.id]: false }));
     setAdding(false);
     apiFetch("/stats").then(setStats).catch(() => {});
   }
 
+  async function replaceItemAllocations(item, rows, { markReceived = false } = {}) {
+    const savedAllocations = await apiFetch(`/items/${item.id}/stock-allocations`, {
+      method: "PUT",
+      body: JSON.stringify({ allocations: allocationPayload(rows) }),
+    });
+    const total = allocationTotal(savedAllocations);
+    const updated = markReceived
+      ? await apiFetch(`/items/${item.id}/received`, { method: "PATCH", body: JSON.stringify({ quantity: total }) })
+      : await apiFetch(`/items/${item.id}`);
+    setAllocationsByItem(prev => ({ ...prev, [item.id]: savedAllocations }));
+    setAllocationErrors(prev => ({ ...prev, [item.id]: false }));
+    updateItem(updated);
+    return { item: updated, allocations: savedAllocations };
+  }
+
   const filtered = items.filter(i => {
+    if (filterCat !== "all" && i.category !== filterCat) return false;
+    if (filterStatus !== "all" && i.status !== filterStatus) return false;
+    if (filterLoc !== "all") {
+      const itemRows = positiveAllocations(allocationRows(allocationsByItem[i.id] || [], containers));
+      if (!itemRows.some(row => row.locationName === filterLoc) && i.location !== filterLoc) return false;
+    }
     if (!search) return true;
-    return i.name.toLowerCase().includes(search.toLowerCase()) ||
-           (i.brand || "").toLowerCase().includes(search.toLowerCase());
+    const query = search.toLowerCase();
+    const storageText = positiveAllocations(allocationRows(allocationsByItem[i.id] || [], containers))
+      .map(row => `${row.containerName} ${row.locationName}`).join(" ").toLowerCase();
+    return i.name.toLowerCase().includes(query) ||
+           (i.brand || "").toLowerCase().includes(query) ||
+           storageText.includes(query);
   });
   const hasFilters = Boolean(search) || filterCat !== "all" || filterLoc !== "all" || filterStatus !== "all";
 
@@ -440,6 +626,18 @@ export default function HomeOS() {
     { key: "inventory", label: "Inventory" },
     { key: "orders", label: `Orders${needToOrder.length + awaitingShipment.length > 0 ? ` (${needToOrder.length + awaitingShipment.length})` : ""}` },
   ];
+
+  const locationNames = locations.filter(location => location.isActive).map(location => location.name);
+  const itemCardProps = item => ({
+    item,
+    allocations: allocationsByItem[item.id] || [],
+    allocationError: Boolean(allocationErrors[item.id]),
+    containers,
+    onUpdate: updateItem,
+    onDelete: deleteItem,
+    onReplaceAllocations: replaceItemAllocations,
+    onReload: loadAll,
+  });
 
   // Clickable status pill handler — toggles filter
   function toggleStatusFilter(status) {
@@ -533,7 +731,7 @@ export default function HomeOS() {
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
               <input aria-label="Search inventory" value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search items or brands..."
+                placeholder="Search items, brands, or containers..."
                 style={{ ...inputStyle, fontSize: 12 }} />
               <div style={{ display: "flex", gap: 8 }}>
                 <select aria-label="Filter by category" value={filterCat} onChange={e => setFilterCat(e.target.value)}
@@ -544,7 +742,7 @@ export default function HomeOS() {
                 <select aria-label="Filter by location" value={filterLoc} onChange={e => setFilterLoc(e.target.value)}
                   style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
                   <option value="all">All Locations</option>
-                  {LOCATIONS.map(l => <option key={l} value={l} style={{ background: "#1a1a2e" }}>{l}</option>)}
+                  {locationNames.map(l => <option key={l} value={l} style={{ background: "#1a1a2e" }}>{l}</option>)}
                 </select>
                 <select aria-label="Filter by status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
                   style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
@@ -578,7 +776,7 @@ export default function HomeOS() {
                   </div>
                 )}
                 {filtered.map(item => (
-                  <ItemCard key={item.id} item={item} onUpdate={updateItem} onDelete={deleteItem} />
+                  <ItemCard key={item.id} {...itemCardProps(item)} />
                 ))}
               </div>
             )}
@@ -602,7 +800,7 @@ export default function HomeOS() {
                       NEED TO ORDER ({needToOrder.length})
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {needToOrder.map(item => <ItemCard key={item.id} item={item} onUpdate={updateItem} onDelete={deleteItem} />)}
+                      {needToOrder.map(item => <ItemCard key={item.id} {...itemCardProps(item)} />)}
                     </div>
                   </>
                 )}
@@ -612,7 +810,7 @@ export default function HomeOS() {
                       AWAITING SHIPMENT ({awaitingShipment.length})
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {awaitingShipment.map(item => <ItemCard key={item.id} item={item} onUpdate={updateItem} onDelete={deleteItem} />)}
+                      {awaitingShipment.map(item => <ItemCard key={item.id} {...itemCardProps(item)} />)}
                     </div>
                   </>
                 )}
