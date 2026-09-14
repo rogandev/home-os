@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { editableItemValues, replenishmentPolicyFor } from "./replenishment.js";
 
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
@@ -10,6 +11,12 @@ const STATUSES   = ["normal", "need_to_order", "awaiting_shipment", "do_not_orde
 
 const STATUS_LABEL = { normal: "In Stock", need_to_order: "Need to Order", awaiting_shipment: "Awaiting Shipment", do_not_order: "Do Not Order" };
 const STATUS_COLOR = { normal: "#4ade80", need_to_order: "#f87171", awaiting_shipment: "#facc15", do_not_order: "#94a3b8" };
+const REPLENISHMENT_LABEL = { manual: "Manual", auto_replenish: "Auto-replenish", do_not_order: "Do Not Order" };
+const REPLENISHMENT_DESCRIPTION = {
+  manual: "Flags the item when stock reaches its reorder level.",
+  auto_replenish: "Tracks your preference; automated purchasing is not enabled yet.",
+  do_not_order: "Keeps the item in inventory without reorder alerts.",
+};
 const CAT_COLOR    = { "Skin Care": "#818cf8", "Hair Care": "#06b6d4", "Personal Care": "#f97316", "Cleaning Supplies": "#4ade80" };
 
 async function apiFetch(path, options = {}) {
@@ -63,10 +70,7 @@ function SelectField({ value, onChange, options }) {
 }
 
 function ItemForm({ initial = {}, onSave, onClose }) {
-  const [form, setForm] = useState({
-    name: "", brand: "", category: "Skin Care", location: "Walk-in Closet",
-    size: "", form: "", quantity: 1, reorder_at: 1, notes: "", ...initial,
-  });
+  const [form, setForm] = useState(() => editableItemValues(initial));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -74,6 +78,14 @@ function ItemForm({ initial = {}, onSave, onClose }) {
   async function handleSave() {
     if (!form.name.trim()) {
       setSaveError("Give this item a name before saving.");
+      return;
+    }
+    if (!Number.isInteger(form.quantity) || form.quantity < 0) {
+      setSaveError("Quantity must be a whole number of zero or more.");
+      return;
+    }
+    if (!Number.isInteger(form.reorder_at) || form.reorder_at < 0) {
+      setSaveError("Reorder level must be a whole number of zero or more.");
       return;
     }
     setSaveError("");
@@ -107,6 +119,16 @@ function ItemForm({ initial = {}, onSave, onClose }) {
         <Field label="QUANTITY"><input style={inputStyle} type="number" min={0} value={form.quantity} onChange={e => set("quantity", Number(e.target.value))} /></Field>
         <Field label="REORDER AT (DEFAULT: 1)"><input style={inputStyle} type="number" min={0} value={form.reorder_at} onChange={e => set("reorder_at", Number(e.target.value))} /></Field>
       </div>
+      <Field label="REPLENISHMENT">
+        <select aria-label="Replenishment" value={form.replenishmentPolicy} onChange={e => set("replenishmentPolicy", e.target.value)} style={{ ...inputStyle, appearance: "none" }}>
+          <option value="manual" style={{ background: "#1a1a2e" }}>Manual</option>
+          <option value="auto_replenish" style={{ background: "#1a1a2e" }}>Auto-replenish</option>
+          <option value="do_not_order" style={{ background: "#1a1a2e" }}>Do Not Order</option>
+        </select>
+        <div style={{ marginTop: 5, fontSize: 10, color: "rgba(255,255,255,0.32)", fontFamily: "monospace" }}>
+          {REPLENISHMENT_DESCRIPTION[form.replenishmentPolicy]}
+        </div>
+      </Field>
       <Field label="NOTES"><input style={inputStyle} value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Optional notes" /></Field>
       {saveError && (
         <div role="alert" style={{ padding: "9px 11px", borderRadius: 8, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#fca5a5", fontSize: 11, fontFamily: "monospace" }}>
@@ -133,9 +155,10 @@ function ItemCard({ item, onUpdate, onDelete }) {
 
   const statusColor = STATUS_COLOR[item.status] || "#fff";
   const catColor = CAT_COLOR[item.category] || "#fff";
+  const replenishmentPolicy = replenishmentPolicyFor(item);
   const isLow = item.status === "need_to_order";
   const isAwaiting = item.status === "awaiting_shipment";
-  const isDoNotOrder = item.status === "do_not_order";
+  const isDoNotOrder = replenishmentPolicy === "do_not_order";
 
   async function decrement() {
     if (working || item.quantity <= 0) return;
@@ -174,6 +197,20 @@ function ItemCard({ item, onUpdate, onDelete }) {
       onUpdate(updated);
     } catch (e) {
       setActionError(e.message || "Status could not be updated.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function setReplenishmentPolicy(policy) {
+    if (working) return;
+    setWorking(true);
+    setActionError("");
+    try {
+      const updated = await apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ replenishmentPolicy: policy }) });
+      onUpdate(updated);
+    } catch (e) {
+      setActionError(e.message || "Replenishment preference could not be updated.");
     } finally {
       setWorking(false);
     }
@@ -244,6 +281,7 @@ function ItemCard({ item, onUpdate, onDelete }) {
               <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: `${catColor}20`, color: catColor, fontFamily: "monospace" }}>{item.category}</span>
               <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: "rgba(255,255,255,0.06)", color: "rgba(255,255,255,0.4)", fontFamily: "monospace" }}>{item.location}</span>
               {item.size && <span style={{ fontSize: 9, color: "rgba(255,255,255,0.25)", fontFamily: "monospace" }}>{item.size}</span>}
+              {replenishmentPolicy === "auto_replenish" && <span style={{ fontSize: 9, padding: "2px 7px", borderRadius: 4, background: "rgba(129,140,248,0.12)", color: "#a5b4fc", fontFamily: "monospace" }}>{REPLENISHMENT_LABEL[replenishmentPolicy]}</span>}
               <span style={{ marginLeft: "auto", fontSize: 9, padding: "2px 7px", borderRadius: 4, background: `${statusColor}20`, color: statusColor, fontFamily: "monospace", fontWeight: 600 }}>
                 {STATUS_LABEL[item.status]}
               </span>
@@ -274,13 +312,13 @@ function ItemCard({ item, onUpdate, onDelete }) {
                   Mark Received →
                 </button>
               )}
-              {item.status !== "do_not_order" ? (
-                <button disabled={working} aria-label={`Do not reorder ${item.name}`} onClick={() => setStatus("do_not_order")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.2)", color: "#cbd5e1", borderRadius: 7, cursor: working ? "not-allowed" : "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
+              {!isDoNotOrder ? (
+                <button disabled={working} aria-label={`Do not reorder ${item.name}`} onClick={() => setReplenishmentPolicy("do_not_order")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(148,163,184,0.08)", border: "1px solid rgba(148,163,184,0.2)", color: "#cbd5e1", borderRadius: 7, cursor: working ? "not-allowed" : "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
                   Do not order
                 </button>
               ) : (
-                <button disabled={working} aria-label={`Resume ordering ${item.name}`} onClick={() => setStatus(item.quantity <= item.reorder_at ? "need_to_order" : "normal")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.22)", color: "#86efac", borderRadius: 7, cursor: working ? "not-allowed" : "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
-                  Resume ordering
+                <button disabled={working} aria-label={`Switch ${item.name} to manual replenishment`} onClick={() => setReplenishmentPolicy("manual")} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.22)", color: "#86efac", borderRadius: 7, cursor: working ? "not-allowed" : "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
+                  Resume manual ordering
                 </button>
               )}
               <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
