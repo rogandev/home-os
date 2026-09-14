@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { editableItemValues, replenishmentPolicyFor } from "./replenishment.js";
 import {
   openOrderMap,
@@ -15,6 +16,7 @@ import {
   positiveAllocations,
   setAllocationQuantity,
 } from "./storage.js";
+import { anchoredMenuPosition } from "./ui.js";
 
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
@@ -56,17 +58,57 @@ async function apiFetch(path, options = {}) {
 }
 
 function Modal({ title, onClose, children }) {
-  return (
-    <div role="dialog" aria-modal="true" aria-label={title} onClick={e => e.target === e.currentTarget && onClose()}
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-      <div style={{ background: "#13131a", borderRadius: "16px 16px 0 0", width: "100%", maxWidth: 600, maxHeight: "90vh", overflowY: "auto", padding: "20px 20px 40px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const previousBodyStyle = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      left: document.body.style.left,
+      right: document.body.style.right,
+      width: document.body.style.width,
+      overflow: document.body.style.overflow,
+    };
+
+    Object.assign(document.body.style, {
+      position: "fixed",
+      top: `-${scrollY}px`,
+      left: `-${scrollX}px`,
+      right: "0",
+      width: "100%",
+      overflow: "hidden",
+    });
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") onCloseRef.current();
+    }
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      Object.assign(document.body.style, previousBodyStyle);
+      window.scrollTo(scrollX, scrollY);
+      requestAnimationFrame(() => {
+        if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true });
+      });
+    };
+  }, []);
+
+  return createPortal(
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={title} onClick={event => event.target === event.currentTarget && onClose()}>
+      <div className="modal-panel">
+        <div className="modal-header">
           <div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{title}</div>
-          <button aria-label={`Close ${title}`} onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer" }}>✕</button>
+          <button aria-label={`Close ${title}`} onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", flexShrink: 0 }}>✕</button>
         </div>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -84,12 +126,104 @@ const inputStyle = {
   color: "#fff", borderRadius: 8, padding: "9px 12px", fontSize: 13, fontFamily: "monospace", outline: "none",
 };
 
-function SelectField({ value, onChange, options }) {
+function AnchoredSelect({ value, onChange, options, ariaLabel, style = {} }) {
+  const [open, setOpen] = useState(false);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+  const normalizedOptions = options.map(option => typeof option === "string" ? { value: option, label: option } : option);
+  const selected = normalizedOptions.find(option => option.value === value) || normalizedOptions[0];
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    function positionMenu() {
+      const rect = buttonRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setMenuPosition(anchoredMenuPosition(rect, window.innerWidth, window.innerHeight));
+    }
+
+    function closeFromOutside(event) {
+      if (!buttonRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false);
+    }
+
+    positionMenu();
+    document.addEventListener("pointerdown", closeFromOutside, true);
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeFromOutside, true);
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+    };
+  }, [open]);
+
+  function choose(nextValue) {
+    onChange(nextValue);
+    setOpen(false);
+    requestAnimationFrame(() => buttonRef.current?.focus({ preventScroll: true }));
+  }
+
   return (
-    <select value={value} onChange={e => onChange(e.target.value)} style={{ ...inputStyle, appearance: "none" }}>
-      {options.map(o => <option key={o} value={o} style={{ background: "#1a1a2e" }}>{o}</option>)}
-    </select>
+    <div style={{ position: "relative", minWidth: 0, ...style }}>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen(current => !current)}
+        onKeyDown={event => {
+          if (event.key === "Escape" && open) {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+            return;
+          }
+          if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            event.preventDefault();
+            if (!open) {
+              setOpen(true);
+              return;
+            }
+            const currentIndex = Math.max(0, normalizedOptions.findIndex(option => option.value === value));
+            const direction = event.key === "ArrowDown" ? 1 : -1;
+            const nextIndex = (currentIndex + direction + normalizedOptions.length) % normalizedOptions.length;
+            onChange(normalizedOptions[nextIndex].value);
+          }
+        }}
+        style={{ ...inputStyle, minHeight: 38, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, textAlign: "left", cursor: "pointer", fontSize: style.fontSize || inputStyle.fontSize }}
+      >
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{selected?.label || "Choose…"}</span>
+        <span aria-hidden="true" style={{ color: "rgba(255,255,255,0.42)", flexShrink: 0 }}>⌄</span>
+      </button>
+      {open && menuPosition && createPortal(
+        <div ref={menuRef} role="listbox" aria-label={ariaLabel} className="anchored-select-menu" style={menuPosition}>
+          {normalizedOptions.map(option => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              onClick={() => choose(option.value)}
+              style={{
+                width: "100%", padding: "10px 12px", border: 0, borderBottom: "1px solid rgba(255,255,255,0.06)",
+                background: option.value === value ? "rgba(129,140,248,0.2)" : "transparent",
+                color: option.value === value ? "#c7d2fe" : "#fff", textAlign: "left", fontFamily: "monospace", fontSize: 11,
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </div>
   );
+}
+
+function SelectField({ value, onChange, options, ariaLabel }) {
+  return <AnchoredSelect value={value} onChange={onChange} options={options} ariaLabel={ariaLabel} />;
 }
 
 function ItemForm({ initial = {}, onSave, onClose }) {
@@ -131,8 +265,8 @@ function ItemForm({ initial = {}, onSave, onClose }) {
         <input style={inputStyle} value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="e.g. Kiehl's" />
       </Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="CATEGORY"><SelectField value={form.category} onChange={v => set("category", v)} options={CATEGORIES} /></Field>
-        <Field label="LOCATION"><SelectField value={form.location} onChange={v => set("location", v)} options={LOCATIONS} /></Field>
+        <Field label="CATEGORY"><SelectField ariaLabel="Category" value={form.category} onChange={v => set("category", v)} options={CATEGORIES} /></Field>
+        <Field label="LOCATION"><SelectField ariaLabel="Location" value={form.location} onChange={v => set("location", v)} options={LOCATIONS} /></Field>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Field label="SIZE"><input style={inputStyle} value={form.size} onChange={e => set("size", e.target.value)} placeholder="e.g. 1.7 fl oz" /></Field>
@@ -143,11 +277,16 @@ function ItemForm({ initial = {}, onSave, onClose }) {
         <Field label="REORDER AT (DEFAULT: 1)"><input style={inputStyle} type="number" min={0} value={form.reorder_at} onChange={e => set("reorder_at", Number(e.target.value))} /></Field>
       </div>
       <Field label="REPLENISHMENT">
-        <select aria-label="Replenishment" value={form.replenishmentPolicy} onChange={e => set("replenishmentPolicy", e.target.value)} style={{ ...inputStyle, appearance: "none" }}>
-          <option value="manual" style={{ background: "#1a1a2e" }}>Manual</option>
-          <option value="auto_replenish" style={{ background: "#1a1a2e" }}>Auto-replenish</option>
-          <option value="do_not_order" style={{ background: "#1a1a2e" }}>Do Not Order</option>
-        </select>
+        <AnchoredSelect
+          ariaLabel="Replenishment"
+          value={form.replenishmentPolicy}
+          onChange={value => set("replenishmentPolicy", value)}
+          options={[
+            { value: "manual", label: "Manual" },
+            { value: "auto_replenish", label: "Auto-replenish" },
+            { value: "do_not_order", label: "Do Not Order" },
+          ]}
+        />
         <div style={{ marginTop: 5, fontSize: 10, color: "rgba(255,255,255,0.32)", fontFamily: "monospace" }}>
           {REPLENISHMENT_DESCRIPTION[form.replenishmentPolicy]}
         </div>
@@ -248,14 +387,20 @@ function StorageModal({ item, allocations, containers, intent, onSave, onClose }
         <div style={{ marginTop: 14, padding: 12, borderRadius: 10, border: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.025)" }}>
           <div style={{ fontSize: 10, color: "rgba(255,255,255,0.45)", fontFamily: "monospace", marginBottom: 8 }}>MOVE STOCK — TOTAL STAYS THE SAME</div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
-            <select aria-label="Move stock from" value={moveFrom} onChange={event => setMoveFrom(event.target.value)} style={{ ...inputStyle, appearance: "none", fontSize: 10 }}>
-              <option value="">From container…</option>
-              {availableSources.map(row => <option key={row.containerId} value={row.containerId}>{row.containerName} ({row.quantity})</option>)}
-            </select>
-            <select aria-label="Move stock to" value={moveTo} onChange={event => setMoveTo(event.target.value)} style={{ ...inputStyle, appearance: "none", fontSize: 10 }}>
-              <option value="">To container…</option>
-              {availableDestinations.map(row => <option key={row.containerId} value={row.containerId}>{row.containerName}</option>)}
-            </select>
+            <AnchoredSelect
+              ariaLabel="Move stock from"
+              value={moveFrom}
+              onChange={setMoveFrom}
+              options={[{ value: "", label: "From container…" }, ...availableSources.map(row => ({ value: row.containerId, label: `${row.containerName} (${row.quantity})` }))]}
+              style={{ fontSize: 10 }}
+            />
+            <AnchoredSelect
+              ariaLabel="Move stock to"
+              value={moveTo}
+              onChange={setMoveTo}
+              options={[{ value: "", label: "To container…" }, ...availableDestinations.map(row => ({ value: row.containerId, label: row.containerName }))]}
+              style={{ fontSize: 10 }}
+            />
           </div>
           <div style={{ display: "flex", gap: 7, marginTop: 7 }}>
             <input aria-label="Move quantity" type="number" min={1} step={1} value={moveAmount} onChange={event => setMoveAmount(event.target.value)} style={{ ...inputStyle, flex: 1 }} />
@@ -409,10 +554,12 @@ function OrderModal({ item, order, containers, onChanged, onClose }) {
             <div style={{ fontSize: 10, color: "#86efac", fontFamily: "monospace", fontWeight: 700, marginBottom: 9 }}>RECEIVE STOCK</div>
             <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 7 }}>
               <input aria-label="Quantity received" style={inputStyle} type="number" min={1} max={order.remainingQuantity} step={1} value={receiptQuantity} onChange={event => setReceiptQuantity(event.target.value)} />
-              <select aria-label="Received into container" style={{ ...inputStyle, appearance: "none" }} value={containerId} onChange={event => setContainerId(event.target.value)}>
-                <option value="">Choose its real container…</option>
-                {activeContainers.map(container => <option key={container.id} value={container.id}>{container.locationName} · {container.name}</option>)}
-              </select>
+              <AnchoredSelect
+                ariaLabel="Received into container"
+                value={containerId}
+                onChange={setContainerId}
+                options={[{ value: "", label: "Choose its real container…" }, ...activeContainers.map(container => ({ value: container.id, label: `${container.locationName} · ${container.name}` }))]}
+              />
             </div>
             <button disabled={working} onClick={receiveOrder} style={{ ...orderButtonStyle, width: "100%", marginTop: 8, border: 0, background: "#4ade80", color: "#052e16" }}>
               {working ? "Saving…" : `Receive ${receiptQuantity || 0} into stock`}
@@ -826,6 +973,55 @@ export default function HomeOS() {
         html, body, #root { height: 100%; }
         input, select { outline: none; }
         button { cursor: pointer; }
+        .modal-backdrop {
+          position: fixed;
+          inset: 0;
+          z-index: 1000;
+          display: flex;
+          align-items: flex-start;
+          justify-content: center;
+          overflow-y: auto;
+          padding: max(16px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom));
+          background: rgba(0,0,0,0.78);
+          overscroll-behavior: contain;
+        }
+        .modal-panel {
+          width: 100%;
+          max-width: 600px;
+          max-height: calc(100dvh - 32px);
+          overflow-y: auto;
+          padding: 0 20px 28px;
+          border: 1px solid rgba(255,255,255,0.1);
+          border-radius: 16px;
+          background: #13131a;
+          box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+        }
+        .modal-header {
+          position: sticky;
+          top: 0;
+          z-index: 2;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin: 0 -4px 18px;
+          padding: 18px 4px 12px;
+          background: linear-gradient(#13131a 75%, rgba(19,19,26,0));
+        }
+        .anchored-select-menu {
+          position: fixed;
+          z-index: 1100;
+          overflow-y: auto;
+          border: 1px solid rgba(129,140,248,0.38);
+          border-radius: 10px;
+          background: #1a1a2e;
+          box-shadow: 0 16px 48px rgba(0,0,0,0.62);
+          overscroll-behavior: contain;
+        }
+        @media (min-width: 700px) {
+          .modal-backdrop { padding-top: 32px; }
+          .modal-panel { max-height: calc(100dvh - 64px); }
+        }
       `}</style>
 
       {/* Sticky header */}
@@ -907,21 +1103,27 @@ export default function HomeOS() {
                 placeholder="Search items, brands, or containers..."
                 style={{ ...inputStyle, fontSize: 12 }} />
               <div style={{ display: "flex", gap: 8 }}>
-                <select aria-label="Filter by category" value={filterCat} onChange={e => setFilterCat(e.target.value)}
-                  style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
-                  <option value="all">All Categories</option>
-                  {CATEGORIES.map(c => <option key={c} value={c} style={{ background: "#1a1a2e" }}>{c}</option>)}
-                </select>
-                <select aria-label="Filter by location" value={filterLoc} onChange={e => setFilterLoc(e.target.value)}
-                  style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
-                  <option value="all">All Locations</option>
-                  {locationNames.map(l => <option key={l} value={l} style={{ background: "#1a1a2e" }}>{l}</option>)}
-                </select>
-                <select aria-label="Filter by status" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
-                  style={{ ...inputStyle, flex: 1, appearance: "none", fontSize: 11 }}>
-                  <option value="all">All Status</option>
-                  {STATUSES.map(s => <option key={s} value={s} style={{ background: "#1a1a2e" }}>{STATUS_LABEL[s]}</option>)}
-                </select>
+                <AnchoredSelect
+                  ariaLabel="Filter by category"
+                  value={filterCat}
+                  onChange={setFilterCat}
+                  options={[{ value: "all", label: "All Categories" }, ...CATEGORIES.map(category => ({ value: category, label: category }))]}
+                  style={{ flex: 1, fontSize: 11 }}
+                />
+                <AnchoredSelect
+                  ariaLabel="Filter by location"
+                  value={filterLoc}
+                  onChange={setFilterLoc}
+                  options={[{ value: "all", label: "All Locations" }, ...locationNames.map(location => ({ value: location, label: location }))]}
+                  style={{ flex: 1, fontSize: 11 }}
+                />
+                <AnchoredSelect
+                  ariaLabel="Filter by status"
+                  value={filterStatus}
+                  onChange={setFilterStatus}
+                  options={[{ value: "all", label: "All Status" }, ...STATUSES.map(status => ({ value: status, label: STATUS_LABEL[status] }))]}
+                  style={{ flex: 1, fontSize: 11 }}
+                />
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: 24, gap: 12 }}>
                 <span aria-live="polite" style={{ fontSize: 10, color: "rgba(255,255,255,0.32)", fontFamily: "monospace" }}>
