@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createOrderMutationGuard } from "../src/order-mutations.js";
+import { createOrderMutationGuard, updateExpectedDeliveryDate } from "../src/order-mutations.js";
 
 test("repeated clicks share one mutation until authoritative refresh finishes", async () => {
   const guard = createOrderMutationGuard();
@@ -51,4 +51,18 @@ test("a saved change followed by failed refresh stays locked and is not reported
   assert.equal(guard.needsRefresh, true);
   await assert.rejects(guard.run(() => assert.fail("must not replay"), async () => {}), /Reload order data/);
   assert.equal(await guard.refresh(async () => {}), true);
+});
+
+test("Not yet sends a dates-only PATCH and never calls stock or receipt endpoints", async () => {
+  const calls = [];
+  const order = { id: "order-1", status: "open", remainingQuantity: 2, orderedDate: "2026-10-01" };
+  const apiFetch = async (path, options) => { calls.push({ path, ...options, body: JSON.parse(options.body) }); };
+  await updateExpectedDeliveryDate(apiFetch, order, "2026-10-04");
+  await updateExpectedDeliveryDate(apiFetch, order, "");
+  assert.deepEqual(calls, [
+    { path: "/orders/order-1", method: "PATCH", body: { expectedDeliveryDate: "2026-10-04" } },
+    { path: "/orders/order-1", method: "PATCH", body: { expectedDeliveryDate: null } },
+  ]);
+  assert.throws(() => updateExpectedDeliveryDate(apiFetch, order, "2026-09-01"), /before the order date/);
+  assert.equal(calls.length, 2);
 });

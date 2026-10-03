@@ -40,6 +40,25 @@ For example, a local test API on port 3001 uses
 - Due state refreshes at local midnight and on window focus/visibility changes.
   Calendar-day differences remain correct over DST transitions.
 
+## Due-delivery check-ins
+
+- With the delivery flag enabled, Orders starts with a compact **Did this
+  arrive?** list for open orders due today or overdue. Oldest expected dates come
+  first; equal dates retain the API order. These orders are not duplicated in
+  **Already coming** below. Upcoming, undated, and legacy incoming items remain
+  in that section.
+- **Yes · record arrival** opens the existing quantity/container/arrival-date
+  confirmation. Opening the prompt never receives stock.
+- **Not yet** opens an optional expected-date editor, from both the compact list
+  and inventory cards. **Keep waiting**, closing, or Escape does not send a
+  request. Saving sends only `PATCH /home-os/orders/:id` with
+  `{ expectedDeliveryDate: "YYYY-MM-DD" }` (or `null` when cleared). It never
+  changes the order quantity, recorded order date, status, or stock allocations.
+- A saved future date or cleared date moves the order out of the due list after
+  authoritative reload. A date still due remains in the list. Expected dates
+  remain optional, including for legacy orders with unknown order dates.
+- The new section and both check-in buttons are hidden when the flag is off.
+
 ## Mutation safety
 
 All order mutations share a synchronous single-flight guard, so repeated clicks
@@ -61,6 +80,13 @@ offsets, DST, due/overdue/unknown/completed orders, legacy unknown-date edits,
 explicit receipt dates, repeated clicks, rejected requests, uncertain outcomes,
 and saved-but-refresh-failed recovery.
 
+DOM interaction coverage (jsdom, a development-only dependency) also verifies
+the prioritized compact list, no duplicate due cards, opening receipt without
+receiving stock, Not yet cancellation/dismissal with zero writes, date-only PATCH
+and optional clearing, repeated-save/dismissal protection, editable validation
+and server rejections, recovery-required failures, and flag-off compatibility.
+These interaction tests do not claim a visual browser or real-API end-to-end pass.
+
 Before rollout, verify in a browser against a disposable compatible API:
 
 - Flag off: the current create/correct/receive workflow sends no new date fields.
@@ -71,6 +97,7 @@ Before rollout, verify in a browser against a disposable compatible API:
 - Exercise validation and backend errors, double clicks, lost receipt responses,
   failed refresh, dismissal/reopening, midnight rollover, and mobile layout.
 
-Implementation-time checks: 24 unit tests and both builds passed. Cloud-browser
-QA was blocked before page load by `net::ERR_BLOCKED_BY_CLIENT` for the local
-preview, so no visual or browser end-to-end pass is claimed.
+Implementation-time checks: 39 tests/subtests and both builds passed
+after the check-in follow-up. The existing cloud-browser route was blocked before
+page load by `net::ERR_BLOCKED_BY_CLIENT` for the local preview; it was not bypassed
+or retried. Visual/browser end-to-end QA remains unverified.

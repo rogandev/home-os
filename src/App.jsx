@@ -17,8 +17,8 @@ import {
   setAllocationQuantity,
 } from "./storage.js";
 import { anchoredMenuPosition } from "./ui.js";
-import { deliveryDatePayload, deliveryStatus, localDate, millisecondsUntilTomorrow, receiptDatePayload } from "./delivery.js";
-import { createOrderMutationGuard } from "./order-mutations.js";
+import { deliveryDatePayload, deliveryStatus, dueDeliveryOrders, expectedDeliveryDatePayload, localDate, millisecondsUntilTomorrow, receiptDatePayload } from "./delivery.js";
+import { createOrderMutationGuard, updateExpectedDeliveryDate } from "./order-mutations.js";
 
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
@@ -482,6 +482,86 @@ function OrderDates({ orderedDate, setOrderedDate, expectedDeliveryDate, setExpe
   );
 }
 
+function NotYetModal({ item, order, onChanged, onRefreshRequired, onClose }) {
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState(order.expectedDeliveryDate || "");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState("");
+
+  function close() {
+    if (!orderMutations.pending) onClose();
+  }
+
+  async function saveDate() {
+    if (orderMutations.pending) return;
+    setWorking(true);
+    setError("");
+    try {
+      // Validate before entering the guard: a local input error is safe to edit.
+      expectedDeliveryDatePayload(order, expectedDeliveryDate);
+      const action = () => updateExpectedDeliveryDate(apiFetch, order, expectedDeliveryDate);
+      // The shared guard protects all check-in and receipt entry points.
+      if (await orderMutations.run(action, onChanged)) onClose();
+    } catch (nextError) {
+      setError(nextError.message || "The expected delivery date could not be updated.");
+      if (orderMutations.needsRefresh) onRefreshRequired(nextError.message || "The order change could not be verified.");
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Modal title={`Not yet · ${item.name}`} busy={working} onClose={close}>
+      <p style={{ color: "rgba(255,255,255,0.65)", fontSize: 12, lineHeight: 1.6, marginBottom: 14 }}>The order stays open and stock stays unchanged. Update the expected delivery date if you know it, or clear it if you don't.</p>
+      <fieldset disabled={working || orderMutations.needsRefresh} style={{ border: 0, minWidth: 0 }}>
+        <Field label="EXPECTED DELIVERY (OPTIONAL)">
+          <input aria-label="Updated expected delivery date" style={{ ...inputStyle, colorScheme: "dark" }} type="date" min={order.orderedDate || undefined} value={expectedDeliveryDate} onChange={event => setExpectedDeliveryDate(event.target.value)} />
+        </Field>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <button type="button" onClick={close} style={{ ...orderButtonStyle, flex: 1, border: "1px solid rgba(255,255,255,0.18)", background: "transparent", color: "#cbd5e1" }}>Keep waiting</button>
+          <button type="button" disabled={expectedDeliveryDate === (order.expectedDeliveryDate || "")} onClick={saveDate} style={{ ...orderButtonStyle, flex: 1, border: "1px solid rgba(129,140,248,0.35)", background: "rgba(129,140,248,0.14)", color: "#c7d2fe" }}>{working ? "Saving…" : "Save expected date"}</button>
+        </div>
+      </fieldset>
+      {error && <div role="alert" style={{ marginTop: 10, color: "#fca5a5", fontSize: 11, fontFamily: "monospace", lineHeight: 1.5 }}>{error}</div>}
+    </Modal>
+  );
+}
+
+function DeliveryCheckInActions({ item, order, containers, today, onChanged, onRefreshRequired }) {
+  const [intent, setIntent] = useState(null);
+  if (!DELIVERY_TRACKING) return null;
+  return (
+    <>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <button type="button" aria-label={`Confirm arrival for ${item.name}`} onClick={() => setIntent("receive")} style={{ ...orderButtonStyle, minHeight: 32, padding: "6px 9px", border: "1px solid rgba(250,204,21,0.3)", background: "rgba(250,204,21,0.12)", color: "#fde68a" }}>Yes · record arrival</button>
+        <button type="button" aria-label={`Not yet arrived: ${item.name}`} onClick={() => setIntent("not-yet")} style={{ ...orderButtonStyle, minHeight: 32, padding: "6px 9px", border: "1px solid rgba(255,255,255,0.18)", background: "transparent", color: "#cbd5e1" }}>Not yet</button>
+      </div>
+      {intent === "receive" && <OrderModal item={item} order={order} containers={containers} today={today} onChanged={onChanged} onRefreshRequired={onRefreshRequired} onClose={() => setIntent(null)} />}
+      {intent === "not-yet" && <NotYetModal item={item} order={order} onChanged={onChanged} onRefreshRequired={onRefreshRequired} onClose={() => setIntent(null)} />}
+    </>
+  );
+}
+
+function DueDeliveries({ entries, containers, today, onChanged, onRefreshRequired }) {
+  if (!DELIVERY_TRACKING || entries.length === 0) return null;
+  return (
+    <section aria-label="Due and overdue deliveries">
+      <h2 style={{ fontSize: 13, fontWeight: 700, color: "#fde68a", marginBottom: 9 }}>Did this arrive? ({entries.length})</h2>
+      <ul style={{ display: "flex", flexDirection: "column", gap: 8, listStyle: "none" }}>
+        {entries.map(({ item, order }) => (
+          <li key={order.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, padding: "12px 13px", borderRadius: 10, background: "rgba(250,204,21,0.06)", border: "1px solid rgba(250,204,21,0.2)" }}>
+            <div style={{ flex: "1 1 180px", minWidth: 0, overflowWrap: "anywhere" }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#fff" }}>{item.name}</div>
+              <div style={{ color: "#fde68a", fontSize: 10, fontFamily: "monospace", lineHeight: 1.6, marginTop: 3 }}>{deliveryStatus(order, today)?.label} · {order.remainingQuantity} still coming</div>
+              <div style={{ color: "rgba(255,255,255,0.45)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.6 }}>Expected {order.expectedDeliveryDate}</div>
+            </div>
+            <DeliveryCheckInActions item={item} order={order} containers={containers} today={today} onChanged={onChanged} onRefreshRequired={onRefreshRequired} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function OrderModal({ item, order, containers, today, onChanged, onRefreshRequired, onClose }) {
   const [orderedQuantity, setOrderedQuantity] = useState(() => order?.orderedQuantity ?? suggestedOrderQuantity(item));
   const [receiptQuantity, setReceiptQuantity] = useState(() => order?.remainingQuantity ?? 1);
@@ -789,7 +869,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
                 {delivery?.needsConfirmation && (
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
                     <span style={{ color: "#fde68a", fontWeight: 700 }}>Did this arrive?</span>
-                    <button aria-label={`Confirm arrival for ${item.name}`} onClick={() => setShowOrder(true)} style={{ ...orderButtonStyle, minHeight: 32, padding: "6px 9px", border: "1px solid rgba(250,204,21,0.3)", background: "rgba(250,204,21,0.12)", color: "#fde68a" }}>Record what arrived →</button>
+                    <DeliveryCheckInActions item={item} order={order} containers={containers} today={today} onChanged={onOrderChanged} onRefreshRequired={onOrderRefreshRequired} />
                   </div>
                 )}
               </div>
@@ -1032,6 +1112,12 @@ export default function HomeOS() {
 
   const needToOrder = items.filter(i => i.status === "need_to_order" && !ordersByItem.has(i.id));
   const awaitingShipment = items.filter(i => i.status === "awaiting_shipment" || ordersByItem.has(i.id));
+  const itemsById = new Map(items.map(item => [item.id, item]));
+  const dueDeliveries = DELIVERY_TRACKING ? dueDeliveryOrders(orders, today)
+    .filter(order => itemsById.has(order.itemId))
+    .map(order => ({ order, item: itemsById.get(order.itemId) })) : [];
+  const dueItemIds = new Set(dueDeliveries.map(({ item }) => item.id));
+  const otherAwaitingShipment = awaitingShipment.filter(item => !dueItemIds.has(item.id));
 
   const tabs = [
     { key: "inventory", label: "Inventory" },
@@ -1272,6 +1358,7 @@ export default function HomeOS() {
               </div>
             ) : (
               <>
+                <DueDeliveries entries={dueDeliveries} containers={containers} today={today} onChanged={() => loadAll({ throwOnError: true })} onRefreshRequired={setError} />
                 {needToOrder.length > 0 && (
                   <>
                     <div style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.2)", fontFamily: "monospace" }}>
@@ -1282,13 +1369,13 @@ export default function HomeOS() {
                     </div>
                   </>
                 )}
-                {awaitingShipment.length > 0 && (
+                {otherAwaitingShipment.length > 0 && (
                   <>
                     <div style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: "rgba(255,255,255,0.2)", fontFamily: "monospace", marginTop: 8 }}>
-                      ALREADY COMING ({awaitingShipment.length})
+                      ALREADY COMING ({otherAwaitingShipment.length})
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                      {awaitingShipment.map(item => <ItemCard key={item.id} {...itemCardProps(item)} />)}
+                      {otherAwaitingShipment.map(item => <ItemCard key={item.id} {...itemCardProps(item)} />)}
                     </div>
                   </>
                 )}
