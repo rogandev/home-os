@@ -1,6 +1,8 @@
 # Home OS configurable categories and locations — capability request
 
-Status: **proposal awaiting platform authorization and final contract**. No backend
+Status: **historical proposal, superseded by API PR78 contract**. See
+[catalog-integration.md](catalog-integration.md) for exact-commit integration preparation.
+Backend remains undeployed; the original proposal below is retained as design history. No backend
 or database change is included. The management component is fixture-only and is
 not imported into the production application. No website release is appropriate
 until the backend handoff and frontend integration pass verification.

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { needsCatalogReload, validateCatalogName, validateReplacement } from "./catalog.js";
+import { needsCatalogReload, validateCatalogName, validateReplacement, isAssignable, catalogConflictMessage } from "./catalog.js";
 import "./catalog.css";
 
 // adapter.load() -> { categories, locations }; adapter.mutate(command) -> void.
-// A future production adapter MUST use a platform-approved atomic contract.
+// Uses the PR78 adapter only in isolated fixtures until approved rollout.
 export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
   const [snapshot, setSnapshot] = useState(null);
   const [kind, setKind] = useState("categories");
@@ -17,7 +17,8 @@ export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
   const lock = useRef(false);
   const dialog = useRef(null);
   const singular = kind === "categories" ? "category" : "location";
-  const records = snapshot?.[kind] || [];
+  const allRecords = snapshot?.[kind] || [];
+  const records = allRecords.filter(isAssignable);
 
   async function refresh() {
     const next = await adapter.load();
@@ -30,13 +31,14 @@ export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
     lock.current = true;
     setBusy(true);
     try {
+      if (adapter.pending) await adapter.retryPending();
       await refresh();
       setBlocked(false);
       setEditor(null);
       setError("");
-    } catch {
+    } catch (failure) {
       setBlocked(true);
-      setError("Could not load current values. Reload before making changes.");
+      setError(adapter.pending ? "An unresolved change is retained. Resolve pending change resends the exact original request safely, then reloads current values." : catalogConflictMessage(failure));
     } finally { lock.current = false; setBusy(false); }
   }
 
@@ -68,8 +70,11 @@ export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
     let command;
     try {
       command = { kind, action: editor.mode, id: editor.record?.id, version: editor.record?.version };
-      if (editor.mode === "delete") command.replacementId = validateReplacement(editor.record, replacement, records);
-      else command.name = validateCatalogName(name, records, editor.record?.id);
+      if (editor.mode === "delete") {
+        command.replacementId = validateReplacement(editor.record, replacement, records);
+        if (command.replacementId) command.replacementVersion = records.find(record => record.id === replacement).version;
+      }
+      else command.name = validateCatalogName(name, allRecords, editor.record?.id);
     } catch (failure) { setError(failure.message); return; }
     lock.current = true;
     setBusy(true);
@@ -87,7 +92,7 @@ export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
         setEditor(null);
         setError(committed
           ? "Saved, but current values could not be loaded. Reload before making another change."
-          : "The result could not be confirmed or the values changed elsewhere. Reload before making another change.");
+          : adapter.pending ? "An unresolved change is retained. Resolve pending change resends the exact original request safely." : catalogConflictMessage(failure));
       } else setError(failure.message || "Check the details and try again.");
     } finally { lock.current = false; setBusy(false); }
   }
@@ -100,13 +105,13 @@ export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
     </div>
     {!editor && error && <p role="alert" className="catalog-error">{error}</p>}
     {notice && <p role="status">{notice}</p>}
-    {blocked && <button onClick={reload} disabled={busy}>{busy ? "Loading…" : "Reload values"}</button>}
+    {blocked && <button onClick={reload} disabled={busy}>{busy ? "Loading…" : adapter.pending ? "Resolve pending change" : "Reload values"}</button>}
     <div className="catalog-toolbar"><p>{records.length} {records.length === 1 ? singular : kind}</p><button className="catalog-primary" disabled={!snapshot || busy || blocked} onClick={() => open("add")}>Add {singular}</button></div>
     {!snapshot && !blocked && <p role="status">Loading values…</p>}
     {snapshot && !records.length && <p>No {kind} yet. Add your first {singular} to get started.</p>}
     <ul className="catalog-list">{records.map(record => <li key={record.id}>
-      <div className="catalog-value"><strong>{record.name}</strong><span>{record.usageCount} {record.usageCount === 1 ? "assignment" : "assignments"}</span></div>
-      <div className="catalog-actions"><button disabled={busy || blocked} aria-label={`Rename ${record.name}`} onClick={() => open("rename", record)}>Rename</button><button disabled={busy || blocked} aria-label={`Delete ${record.name}`} onClick={() => open("delete", record)}>Delete</button></div>
+      <div className="catalog-value"><strong>{record.name}</strong><span>{record.usageCount} {record.usageCount === 1 ? "assignment" : "assignments"} · {record.itemCount} items · {record.containerCount} containers{record.isProtected ? " · Protected legacy location" : ""}</span></div>
+      <div className="catalog-actions"><button disabled={busy || blocked} aria-label={`Rename ${record.name}`} onClick={() => open("rename", record)}>Rename</button>{!record.isProtected && <button disabled={busy || blocked} aria-label={`Delete ${record.name}`} onClick={() => open("delete", record)}>Delete</button>}</div>
     </li>)}</ul>
     {editor && <dialog ref={dialog} aria-labelledby="catalog-dialog-title" onCancel={event => { event.preventDefault(); close(); }}>
       <form onSubmit={save}>
@@ -120,7 +125,7 @@ export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
           {editor.record.usageCount > 0 && records.length < 2 && <p>Add another {singular} first, then return here.</p>}
           {replacement && <p>All assignments will move to <strong>{records.find(record => record.id === replacement)?.name}</strong>.</p>}
         </> : <>
-          <label>Name<input autoFocus value={name} maxLength={100} disabled={busy} onChange={event => setName(event.target.value)} /></label>
+          <label>Name<input autoFocus value={name} disabled={busy} onChange={event => setName(event.target.value)} /></label>
           {editor.mode === "rename" && <p>All {editor.record.usageCount} assignments will use the new name.</p>}
         </>}
         {error && <p role="alert" className="catalog-error">{error}</p>}

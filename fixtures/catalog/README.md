@@ -13,10 +13,16 @@ npx vite --config fixtures/catalog/vite.config.js
 
 Open `http://127.0.0.1:4176/fixtures/catalog/`. The server binds loopback only;
 port 4173 is deliberately not used. Reload the page to reset all data. There is
-no fetch/proxy/API token/localStorage use. Browser connections are restricted to
+no live fetch/proxy/API token/localStorage use. The separate storage-check button
+uses a temporary IndexedDB journal scope and clears its disposable request after replay. Browser connections are restricted to
 self by the fixture response CSP. A dedicated dependency cache prevents conflicts
 with production builds and test module graphs; hot reload is disabled, so reload
 after source edits.
+
+Current adapter/contract preparation: [catalog integration](../../docs/catalog-integration.md).
+The latest fixture adds tombstones, protected Kitchen, inactive room and all-container
+usage. Office is an ordinary deletable fixture location. Resolve pending change
+explicitly retries the same UUID/envelope after an uncertain response.
 
 ## Review steps
 
@@ -29,10 +35,11 @@ after source edits.
    filter resets to All categories. An unused category deletes without replacement.
 5. Repeat for Locations. These are presentation-model assignments only; the
    platform must implement real containers/legacy-location handling first.
-6. Failure controls: validation keeps the editor correctable; conflict/offline/
-   lost-response require Reload values. Refresh simulates a committed write with
-   a failed reload. Switch failure to none, then Reload values; no mutation is
-   replayed. Delay next operations applies 1.2 seconds until failure mode changes;
+6. Failure controls: validation keeps the editor correctable; conflict/collision
+   require Reload values. Offline/lost-response retain an exact request envelope;
+   Resolve pending change explicitly retries it with the same UUID. Refresh
+   simulates a committed write with failed reload. Switch failure to none and
+   reload/resolve as shown. Definite conflicts are never replayed. Delay next operations applies 1.2 seconds until failure mode changes;
    double-click Save and try Escape: editor stays pending, then closes once.
 
 ## Verification on 2026-10-03

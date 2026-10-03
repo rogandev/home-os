@@ -39,7 +39,7 @@ async function fixture() {
 }
 
 test("catalog validation rejects missing, duplicate and invalid replacement values", () => {
-  const records = [{ id: "a", name: "Skin Care", usageCount: 2 }];
+  const records = [{ id: "a", name: "Skin Care", usageCount: 2, isActive: true, deletedAt: null }];
   assert.throws(() => validateCatalogName("  ", records), /Enter a name/);
   assert.throws(() => validateCatalogName("skin care ", records), /already exists/);
   assert.throws(() => validateCatalogName("x".repeat(101), records), /100/);
@@ -50,12 +50,31 @@ test("catalog validation rejects missing, duplicate and invalid replacement valu
 });
 
 test("catalog manager fixture interactions", async t => {
+  await t.test("PR78 protected/inactive/tombstone controls and container usage", async () => {
+    const f = await fixture(); try {
+      assert.equal(f.button("Rename Retired category"), undefined);
+      await f.click("Locations");
+      assert.ok(f.button("Rename Kitchen"));
+      assert.equal(f.button("Delete Kitchen"), undefined);
+      assert.equal(f.button("Rename Inactive room"), undefined);
+      assert.match(document.body.textContent, /4 assignments · 2 items · 2 containers/);
+      await f.click("Delete Office");
+      assert.equal(document.querySelector("dialog select option[value=inactive]"), null);
+      await f.change("dialog select", "closet");
+      f.adapter.configure({ failure: "collision" }); await f.click("Delete and save");
+      assert.match(document.querySelector('[role="alert"]').textContent, /No stock was merged/);
+      assert.equal(f.adapter.writes[0].body.replacementVersion, 1);
+      assert.equal(f.button("Add location").disabled, true);
+      f.adapter.configure(); await f.click("Reload values");
+      assert.ok(f.button("Delete Office"));
+    } finally { await f.close(); }
+  });
   for (const kind of ["category", "location"]) {
     await t.test(`${kind}: add, duplicate, rename all assignments, cancel and replace`, async () => {
       const f = await fixture();
       try {
         if (kind === "location") await f.click("Locations");
-        const original = kind === "category" ? "Skin Care" : "Bathroom";
+        const original = kind === "category" ? "Skin Care" : "Office";
         const key = kind === "category" ? "categories" : "locations";
         const idKey = kind === "category" ? "categoryId" : "locationId";
         await f.click(`Add ${kind}`);
@@ -81,7 +100,7 @@ test("catalog manager fixture interactions", async t => {
         await f.change("dialog select", "fixture-10"); await f.click("Delete and save");
         data = await f.adapter.load();
         assert.equal(data.items.filter(item => item[idKey] === "fixture-10").length, 2);
-        assert.equal(data[key].some(row => row.name === "Renamed value"), false);
+        assert.ok(data[key].find(row => row.name === "Renamed value").deletedAt);
       } finally { await f.close(); }
     });
   }
@@ -108,7 +127,7 @@ test("catalog manager fixture interactions", async t => {
     } finally { await f.close(); }
   });
   for (const failure of ["validation", "conflict", "offline", "refresh", "lost-response"]) {
-    await t.test(`${failure}: error and explicit recovery without replay`, async () => {
+    await t.test(`${failure}: error and explicit recovery with exact replay only when uncertain`, async () => {
       const f = await fixture(); try {
         f.adapter.configure({ failure }); await f.click("Rename Skin Care"); await f.change("dialog input", "Face Care"); await f.click("Save");
         assert.equal(f.adapter.writes.length, 1);
@@ -118,9 +137,9 @@ test("catalog manager fixture interactions", async t => {
         } else {
           assert.equal(document.querySelector("dialog"), null); assert.equal(f.button("Add category").disabled, true);
           if (failure === "refresh") { await f.click("Reload values"); assert.equal(f.button("Add category").disabled, true); }
-          f.adapter.configure(); await f.click("Reload values");
-          assert.equal(f.button("Add category").disabled, false); assert.equal(f.adapter.writes.length, 1);
-          assert.ok(f.button(`Rename ${["refresh", "lost-response"].includes(failure) ? "Face Care" : "Skin Care"}`));
+          f.adapter.configure(); await f.click(f.button("Resolve pending change") ? "Resolve pending change" : "Reload values");
+          assert.equal(f.button("Add category").disabled, false); assert.equal(f.adapter.writes.length, ["offline", "lost-response"].includes(failure) ? 2 : 1);
+          assert.ok(f.button(`Rename ${["refresh", "lost-response", "offline"].includes(failure) ? "Face Care" : "Skin Care"}`));
         }
       } finally { await f.close(); }
     });
