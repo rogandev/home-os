@@ -19,10 +19,12 @@ import {
 import { anchoredMenuPosition } from "./ui.js";
 import { deliveryDatePayload, deliveryStatus, localDate, millisecondsUntilTomorrow, receiptDatePayload } from "./delivery.js";
 import { createOrderMutationGuard } from "./order-mutations.js";
+import { createInventoryCopySaver, inventoryCopyDraft, validateInventoryCopy } from "./inventory-copy.js";
 
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
 const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_API_TOKEN || "";
+const INVENTORY_COPY = import.meta.env.VITE_HOME_INVENTORY_COPY === "true";
 const DELIVERY_TRACKING = import.meta.env.VITE_HOME_DELIVERY_TRACKING === "true";
 const orderMutations = createOrderMutationGuard();
 
@@ -252,13 +254,27 @@ function SelectField({ value, onChange, options, ariaLabel }) {
   return <AnchoredSelect value={value} onChange={onChange} options={options} ariaLabel={ariaLabel} />;
 }
 
-function ItemForm({ initial = {}, onSave, onClose }) {
+function ItemForm({ initial = {}, onSave, onClose, copyMode = false, containers = [], onSaveStateChange = () => {} }) {
   const [form, setForm] = useState(() => editableItemValues(initial));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const [copiedAllocations, setCopiedAllocations] = useState(() => initial.allocations || []);
+  const [locked, setLocked] = useState(false);
+  const savePending = useRef(false);
+  const set = (k, v) => { if (!savePending.current && !locked) setForm(f => ({ ...f, [k]: v })); };
+
+  function changeCopiedAllocation(containerId, value) {
+    if (savePending.current || locked) return;
+    const quantity = Number(value);
+    const next = copiedAllocations.some(row => row.containerId === containerId)
+      ? copiedAllocations.map(row => row.containerId === containerId ? { ...row, quantity } : row)
+      : [...copiedAllocations, { containerId, quantity }];
+    setCopiedAllocations(next);
+    setForm(current => ({ ...current, quantity: allocationTotal(next) }));
+  }
 
   async function handleSave() {
+    if (savePending.current) return;
     if (!form.name.trim()) {
       setSaveError("Give this item a name before saving.");
       return;
@@ -272,35 +288,48 @@ function ItemForm({ initial = {}, onSave, onClose }) {
       return;
     }
     setSaveError("");
+    savePending.current = true;
     setSaving(true);
+    onSaveStateChange(true);
+    let uncertain = locked;
     try {
-      await onSave(form);
+      await onSave(copyMode ? { ...form, allocations: copiedAllocations } : form);
+      uncertain = false;
     } catch (error) {
-      setSaveError(error.message || "The item could not be saved.");
+      uncertain = copyMode && Boolean(error.uncertain);
+      setLocked(uncertain);
+      setSaveError(uncertain
+        ? "We could not confirm the save. Your draft is held unchanged. Retry to recover this same item safely."
+        : error.message || "The item could not be saved.");
     } finally {
+      savePending.current = false;
       setSaving(false);
+      onSaveStateChange(uncertain);
     }
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {copyMode && <p style={{ color: "#c7d2fe", fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>Review this new item and change anything you need. Saving keeps the original unchanged. Orders and history are not copied.</p>}
+      <fieldset disabled={saving || locked} style={{ border: 0, minWidth: 0, padding: 0 }}>
       <Field label="PRODUCT NAME *">
-        <input style={inputStyle} value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Ultra Facial Cream" />
+        <input aria-label="Product name" style={inputStyle} value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Ultra Facial Cream" />
       </Field>
+      <Field label="DESCRIPTION"><input aria-label="Description" style={inputStyle} value={form.description} onChange={e => set("description", e.target.value)} placeholder="Optional description" /></Field>
       <Field label="BRAND">
-        <input style={inputStyle} value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="e.g. Kiehl's" />
+        <input aria-label="Brand" style={inputStyle} value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="e.g. Kiehl's" />
       </Field>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="CATEGORY"><SelectField ariaLabel="Category" value={form.category} onChange={v => set("category", v)} options={CATEGORIES} /></Field>
-        <Field label="LOCATION"><SelectField ariaLabel="Location" value={form.location} onChange={v => set("location", v)} options={LOCATIONS} /></Field>
+      <div className="item-form-columns">
+        <Field label="CATEGORY"><SelectField ariaLabel="Category" value={form.category} onChange={v => set("category", v)} options={[...new Set([...CATEGORIES, form.category])]} /></Field>
+        <Field label="LOCATION"><SelectField ariaLabel="Location" value={form.location} onChange={v => set("location", v)} options={[...new Set([...LOCATIONS, form.location])]} /></Field>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="SIZE"><input style={inputStyle} value={form.size} onChange={e => set("size", e.target.value)} placeholder="e.g. 1.7 fl oz" /></Field>
-        <Field label="FORM"><input style={inputStyle} value={form.form} onChange={e => set("form", e.target.value)} placeholder="e.g. Tube, Jar" /></Field>
+      <div className="item-form-columns">
+        <Field label="SIZE"><input aria-label="Size" style={inputStyle} value={form.size} onChange={e => set("size", e.target.value)} placeholder="e.g. 1.7 fl oz" /></Field>
+        <Field label="FORM"><input aria-label="Form" style={inputStyle} value={form.form} onChange={e => set("form", e.target.value)} placeholder="e.g. Tube, Jar" /></Field>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="QUANTITY"><input style={inputStyle} type="number" min={0} value={form.quantity} onChange={e => set("quantity", Number(e.target.value))} /></Field>
-        <Field label="REORDER AT (DEFAULT: 1)"><input style={inputStyle} type="number" min={0} value={form.reorder_at} onChange={e => set("reorder_at", Number(e.target.value))} /></Field>
+      <div className="item-form-columns">
+        <Field label={copyMode ? "QUANTITY (FROM STORAGE)" : "QUANTITY"}><input aria-label="Quantity" readOnly={copyMode} style={inputStyle} type="number" min={0} value={form.quantity} onChange={e => set("quantity", Number(e.target.value))} /></Field>
+        <Field label="REORDER AT (DEFAULT: 1)"><input aria-label="Reorder at" style={inputStyle} type="number" min={0} value={form.reorder_at} onChange={e => set("reorder_at", Number(e.target.value))} /></Field>
       </div>
       <Field label="REPLENISHMENT">
         <AnchoredSelect
@@ -317,7 +346,17 @@ function ItemForm({ initial = {}, onSave, onClose }) {
           {REPLENISHMENT_DESCRIPTION[form.replenishmentPolicy]}
         </div>
       </Field>
-      <Field label="NOTES"><input style={inputStyle} value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Optional notes" /></Field>
+      <Field label="NOTES"><input aria-label="Notes" style={inputStyle} value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Optional notes" /></Field>
+      {copyMode && <Field label="STORAGE · EDIT QUANTITIES FOR THIS COPY">
+        <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>The location above is the product's default. Stock stays in the containers below; edit these quantities to change its total or storage.</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {allocationRows(copiedAllocations, containers).map(row => <label key={row.containerId} className="copy-storage-row" style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: 10 }}>
+            <span style={{ minWidth: 0, overflowWrap: "anywhere", fontSize: 12 }}>{row.containerName}<span style={{ display: "block", color: "rgba(255,255,255,0.42)", fontSize: 10, marginTop: 3 }}>{row.locationName}{!row.isActive ? " · Archived" : ""}</span></span>
+            <input aria-label={`${row.containerName} copy quantity`} style={{ ...inputStyle, width: 74, minHeight: 44 }} type="number" min={0} step={1} disabled={!row.isActive} value={copiedAllocations.find(allocation => allocation.containerId === row.containerId)?.quantity ?? 0} onChange={event => changeCopiedAllocation(row.containerId, event.target.value)} />
+          </label>)}
+        </div>
+      </Field>}
+      </fieldset>
       {saveError && (
         <div role="alert" style={{ padding: "9px 11px", borderRadius: 8, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#fca5a5", fontSize: 11, fontFamily: "monospace" }}>
           {saveError}
@@ -327,9 +366,40 @@ function ItemForm({ initial = {}, onSave, onClose }) {
         marginTop: 8, background: "#818cf8", color: "#000", border: "none", borderRadius: 10,
         padding: "12px", fontSize: 13, fontFamily: "monospace", fontWeight: 700,
         cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.6 : 1,
-      }}>{saving ? "Saving..." : "Save Item"}</button>
+      }}>{saving ? "Saving..." : locked ? "Retry Save Safely" : copyMode ? "Save Copy" : "Save Item"}</button>
+      {copyMode && <button disabled={saving || locked} onClick={onClose} style={{ ...inputStyle, minHeight: 44, marginTop: 6, opacity: saving || locked ? 0.4 : 1 }}>Cancel</button>}
     </div>
   );
+}
+
+function CopyItemModal({ draft, containers, onCreated, onClose }) {
+  const saver = useRef(null);
+  if (!saver.current) saver.current = createInventoryCopySaver(async (path, options) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try { return await apiFetch(path, { ...options, signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+  });
+  const blocking = useRef(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    function preventInterruptedSave(event) {
+      if (!blocking.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", preventInterruptedSave);
+    return () => window.removeEventListener("beforeunload", preventInterruptedSave);
+  }, []);
+  function saveStateChanged(value) { blocking.current = value; setBusy(value); }
+  function close() { if (!blocking.current) onClose(); }
+  async function save(values) {
+    const created = await saver.current.save(values);
+    onCreated(created);
+  }
+  return <Modal title="Copy Item" onClose={close} busy={busy}>
+    <ItemForm initial={draft} containers={containers} copyMode onSave={save} onClose={close} onSaveStateChange={saveStateChanged} />
+  </Modal>;
 }
 
 function StorageModal({ item, allocations, containers, intent, onSave, onClose }) {
@@ -641,7 +711,7 @@ function OrderModal({ item, order, containers, today, onChanged, onRefreshRequir
   );
 }
 
-function ItemCard({ item, today, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload }) {
+function ItemCard({ item, today, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload, onCopy }) {
   const [editing, setEditing] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const [showOrder, setShowOrder] = useState(false);
@@ -749,7 +819,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
 
   return (
     <>
-      <div style={{
+      <div data-item-id={item.id} style={{
         background: isLow ? "rgba(248,113,113,0.06)" : isAwaiting ? "rgba(250,204,21,0.06)" : isDoNotOrder ? "rgba(148,163,184,0.05)" : "rgba(255,255,255,0.03)",
         border: `1px solid ${isLow ? "rgba(248,113,113,0.2)" : isAwaiting ? "rgba(250,204,21,0.2)" : isDoNotOrder ? "rgba(148,163,184,0.18)" : "rgba(255,255,255,0.07)"}`,
         borderRadius: 12, padding: "12px 14px", contentVisibility: "auto", containIntrinsicSize: "150px",
@@ -849,6 +919,15 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
                   Resume manual ordering
                 </button>
               )}
+              {INVENTORY_COPY && <button disabled={working} aria-label={`Copy ${item.name}`} onClick={() => {
+                setActionError("");
+                if (allocationError) { setActionError("Storage details are unavailable. Reload before copying."); return; }
+                try {
+                  const draft = inventoryCopyDraft(item, allocations);
+                  validateInventoryCopy(draft);
+                  onCopy(draft);
+                } catch (error) { setActionError(error.message); }
+              }} style={{ fontSize: 11, padding: "8px 12px", minHeight: 44, background: "rgba(129,140,248,0.12)", border: "1px solid rgba(129,140,248,0.3)", color: "#c7d2fe", borderRadius: 7, fontFamily: "monospace" }}>Copy</button>}
               <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
               <button onClick={handleDelete} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "transparent", border: "1px solid rgba(248,113,113,0.15)", color: "rgba(248,113,113,0.58)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Delete permanently</button>
             </div>
@@ -909,6 +988,7 @@ export default function HomeOS() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
+  const [copyDraft, setCopyDraft] = useState(null);
   const [tab, setTab] = useState("inventory");
 
   const loadAll = useCallback(async ({ throwOnError = false } = {}) => {
@@ -981,11 +1061,25 @@ export default function HomeOS() {
 
   async function addItem(form) {
     const created = await apiFetch("/items", { method: "POST", body: JSON.stringify(form) });
-    const allocations = await apiFetch(`/items/${created.id}/stock-allocations`);
+    // Creation already committed. A refresh failure must never offer another create.
+    const allocationResult = await apiFetch(`/items/${created.id}/stock-allocations`).then(
+      allocations => ({ allocations, failed: false }),
+      () => ({ allocations: [], failed: true }),
+    );
+    const allocations = allocationResult.allocations;
     setItems(prev => [created, ...prev]);
     setAllocationsByItem(prev => ({ ...prev, [created.id]: allocations }));
-    setAllocationErrors(prev => ({ ...prev, [created.id]: false }));
+    setAllocationErrors(prev => ({ ...prev, [created.id]: allocationResult.failed }));
     setAdding(false);
+    apiFetch("/stats").then(setStats).catch(() => {});
+  }
+
+  function copiedItemCreated(created) {
+    const { allocations, ...item } = created;
+    setItems(previous => [item, ...previous.filter(existing => existing.id !== item.id)]);
+    setAllocationsByItem(previous => ({ ...previous, [item.id]: allocations }));
+    setAllocationErrors(previous => ({ ...previous, [item.id]: false }));
+    setCopyDraft(null);
     apiFetch("/stats").then(setStats).catch(() => {});
   }
 
@@ -1052,6 +1146,7 @@ export default function HomeOS() {
     onOrderChanged: () => loadAll({ throwOnError: true }),
     onOrderRefreshRequired: setError,
     onReload: loadAll,
+    onCopy: setCopyDraft,
   });
 
   // Clickable status pill handler — toggles filter
@@ -1063,6 +1158,10 @@ export default function HomeOS() {
     <div style={{ minHeight: "100vh", background: "#09090e", color: "#e2e8f0", fontFamily: "system-ui, sans-serif", overflowY: "auto" }}>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        .item-form-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .item-form-columns input { min-width: 0; }
+        .copy-storage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+        @media (max-width: 480px) { .item-form-columns { grid-template-columns: minmax(0, 1fr); } }
         .order-date-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
         .order-date-fields input { min-width: 0; }
         @media (max-width: 480px) { .order-date-fields { grid-template-columns: minmax(0, 1fr); } }
@@ -1297,6 +1396,8 @@ export default function HomeOS() {
           </div>
         )}
       </div>
+
+      {copyDraft && <CopyItemModal draft={copyDraft} containers={containers} onCreated={copiedItemCreated} onClose={() => setCopyDraft(null)} />}
 
       {adding && (
         <Modal title="Add Item" onClose={() => setAdding(false)}>
