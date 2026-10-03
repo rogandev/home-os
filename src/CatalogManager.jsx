@@ -4,7 +4,7 @@ import "./catalog.css";
 
 // adapter.load() -> { categories, locations }; adapter.mutate(command) -> void.
 // Uses the PR78 adapter only in isolated fixtures until approved rollout.
-export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
+export default function CatalogManager({ adapter, onSnapshot = () => {}, onAvailabilityChange }) {
   const [snapshot, setSnapshot] = useState(null);
   const [kind, setKind] = useState("categories");
   const [editor, setEditor] = useState(null);
@@ -43,6 +43,7 @@ export default function CatalogManager({ adapter, onSnapshot = () => {} }) {
   }
 
   useEffect(() => { reload(); }, [adapter]);
+  useEffect(() => { onAvailabilityChange?.(busy || blocked); }, [busy, blocked, onAvailabilityChange]);
   useEffect(() => {
     if (!editor) return;
     const previous = document.activeElement;

@@ -2,7 +2,7 @@
 .catalog * { box-sizing:border-box; }
 .catalog h1 { font-size:28px; line-height:1.2; margin:8px 0; color:#fff; }
 .catalog h2 { margin:0 0 20px; font-size:22px; }
-.catalog p { color:#b0b2c4; }
+.catalog p { color:#b0b2c4; margin:12px 0; }
 .catalog .catalog-eyebrow { color:#a5b4fc; font:11px monospace; letter-spacing:.14em; }
 .catalog button,.catalog input,.catalog select { font:inherit; border:1px solid #444456; border-radius:9px; padding:10px 14px; color:#f1f5f9; background:#20202d; min-height:44px; }
 .catalog button { cursor:pointer; }
@@ -17,7 +17,7 @@
 .catalog-value { min-width:0; overflow-wrap:anywhere; }
 .catalog-value span { display:block; color:#9396ad; font-size:12px; margin-top:3px; }
 .catalog-actions { flex-shrink:0; }
-.catalog dialog { color:#e2e8f0; background:#171722; border:1px solid #454558; border-radius:16px; width:min(480px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); padding:24px; overflow:auto; }
+.catalog dialog { margin:auto; color:#e2e8f0; background:#171722; border:1px solid #454558; border-radius:16px; width:min(480px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); padding:24px; overflow:auto; }
 .catalog dialog::backdrop { background:#000b; }
 .catalog label { display:block; font-weight:600; }
 .catalog input,.catalog select { display:block; width:100%; margin:8px 0 18px; }

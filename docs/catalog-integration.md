@@ -46,14 +46,17 @@ while reparenting location containers. It cannot prove database atomicity.
 `canonicalItemReferences` prepares only changed stable-ID assignment fields;
 it never emits legacy category/location strings. Unchanged inactive references
 are omitted on unrelated edits. Canonical location changes represent preferred
-future destination, not movement of existing stock. Production forms/cards/filters
-remain unchanged and must be integrated after backend deployment; stock must still
+future destination, not movement of existing stock. Forms/cards/filters now have gated integration, enabled only by
+VITE_HOME_CATALOGS=true after backend readiness; stock must still
 be displayed through allocations rather than preferred location.
 
 ## Gates and remaining gaps
 
-- Production `App.jsx`/`main.jsx` do not import the adapter or manager. The adapter
-  itself defaults disabled. Only the disposable fixture explicitly enables it.
+- `App.jsx` now includes gated catalog forms, stable-ID filters, preferred-room
+  semantics and Settings. VITE_HOME_CATALOGS is false/unset in production until
+  backend readiness. VITE_HOME_CATALOG_MANAGEMENT=false can hide mutations while
+  preserving catalog-aware inventory. The adapter itself defaults disabled.
+  Only disposable fixtures are enabled during preparation.
 - No deployment, API credential, production write, backend or schema edit occurred.
 - Backend reports its PostgreSQL16 required check passed; that does not establish
   a deployed contract. Separate approval, backend rollout and read-only verification
@@ -66,7 +69,7 @@ be displayed through allocations rather than preferred location.
   explicitly provides no cross-request snapshot endpoint. Concurrent changes can
   yield a mixed read, and versions/usage must be revalidated server-side on writes.
 - Inactive/tombstone selection handling, stable-ID filters and item editing are
-  prepared as helpers/fixtures, not wired into the production inventory screen.
+  wired behind the disabled flag and covered by full-app DOM fixture tests.
 - No full mock of historical alias reservation or database locale normalization
   is claimed. Backend contract tests own those rules; the UI handles 409 responses.
 
@@ -86,3 +89,41 @@ recovery, protected Kitchen with Rename only, inactive replacement exclusion,
 container-collision409 blocking and reload recovery. Phone 390x844 and iPad-size
 820x1180 layouts checked; iPad document/scrollWidth both 805 (scrollbar excluded).
 No production API calls, device changes, merge or deployment.
+
+
+## Gated app preparation and release checklist
+
+The full app fixture is `fixtures/catalog/app.html`. Every fetch terminates in an
+in-memory transport, with no network fallback. Tests verify flag-off legacy forms,
+flag-on canonical create/edit payloads, unchanged stock on preferred-room edits,
+rename retaining a selected category filter, replacement deletion resetting it,
+and preventing inventory navigation while a catalog operation is unresolved.
+The API origin plus fixed shared-account domain scopes the pending journal; a
+future authentication/account migration must explicitly change/transfer that scope.
+
+Preparation checks: 65 tests pass. Final integrated browser verification is still
+pending: after restarting only port 4176, IAB reload returned a Browser Use URL
+policy block for its data-URL ERR_CONNECTION_REFUSED page. No navigation bypass
+was attempted. Host curl subsequently verified the actual fixture URL returns
+HTTP200 and the node listener is healthy. Earlier isolated-manager responsive QA
+remains valid but does not count as a pass for the new full-app integration.
+
+Before release:
+1. Receive backend-ready evidence: approved deployed commit, migration/snapshot/
+   quiescence verification, healthy read-only catalog/item/stock checks.
+2. Run final tests and both catalog flags in preview against disposable data;
+   complete desktop/phone/iPad integrated browser QA. Verify pending journal
+   recovery across reload and no production category/item writes during QA.
+3. Check exact-commit required statuses and compare preview inventory reads without
+   writes. Record currently deployed frontend artifact and flag values.
+4. Publish only the approved frontend commit with VITE_HOME_CATALOGS=true and
+   VITE_HOME_CATALOG_MANAGEMENT=true; verify live reads/rendering only.
+
+Rollback: before any catalog mutation, the previous frontend artifact may be
+restored if it remains compatible with the deployed backend. After custom values
+or renames/replacements exist, do not roll back to hard-coded pickers. Instead
+retain the catalog-aware build with VITE_HOME_CATALOGS=true and rebuild with
+VITE_HOME_CATALOG_MANAGEMENT=false to disable management, or deploy a reviewed
+forward fix. Never clear an unresolved journal merely to unblock the UI. Backend
+rollback is owned by the API rollout plan; no schema/data rollback is performed
+from this frontend task. No production flags, merge or deployment have occurred.

@@ -1,3 +1,6 @@
+import CatalogManager from "./CatalogManager.jsx";
+import { createCatalogAdapter, createIndexedDBCatalogJournal } from "./catalog-adapter.js";
+import { canonicalItemPayload, catalogOptions, isAssignable } from "./catalog.js";
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { editableItemValues, replenishmentPolicyFor } from "./replenishment.js";
@@ -23,6 +26,14 @@ import { createOrderMutationGuard, updateExpectedDeliveryDate } from "./order-mu
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
 const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_API_TOKEN || "";
+const CATALOGS_ENABLED = import.meta.env.VITE_HOME_CATALOGS === "true";
+const CATALOG_MANAGEMENT_ENABLED = CATALOGS_ENABLED && import.meta.env.VITE_HOME_CATALOG_MANAGEMENT !== "false";
+let sharedCatalogAdapter;
+function getCatalogAdapter() {
+  if (!sharedCatalogAdapter) sharedCatalogAdapter = createCatalogAdapter({ request: apiFetch, journal: createIndexedDBCatalogJournal(`${API}:home-os-shared-account-v1`), enabled: CATALOGS_ENABLED });
+  return sharedCatalogAdapter;
+}
+
 const DELIVERY_TRACKING = import.meta.env.VITE_HOME_DELIVERY_TRACKING === "true";
 const orderMutations = createOrderMutationGuard();
 
@@ -252,8 +263,8 @@ function SelectField({ value, onChange, options, ariaLabel }) {
   return <AnchoredSelect value={value} onChange={onChange} options={options} ariaLabel={ariaLabel} />;
 }
 
-function ItemForm({ initial = {}, onSave, onClose }) {
-  const [form, setForm] = useState(() => editableItemValues(initial));
+function ItemForm({ initial = {}, onSave, onClose, catalogs = null }) {
+  const [form, setForm] = useState(() => ({ ...editableItemValues(initial), ...(catalogs ? { categoryId: initial.categoryId || "", locationId: initial.locationId || "" } : {}) }));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -274,7 +285,7 @@ function ItemForm({ initial = {}, onSave, onClose }) {
     setSaveError("");
     setSaving(true);
     try {
-      await onSave(form);
+      await onSave(catalogs ? canonicalItemPayload(form, initial, catalogs) : form);
     } catch (error) {
       setSaveError(error.message || "The item could not be saved.");
     } finally {
@@ -291,8 +302,8 @@ function ItemForm({ initial = {}, onSave, onClose }) {
         <input style={inputStyle} value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="e.g. Kiehl's" />
       </Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="CATEGORY"><SelectField ariaLabel="Category" value={form.category} onChange={v => set("category", v)} options={CATEGORIES} /></Field>
-        <Field label="LOCATION"><SelectField ariaLabel="Location" value={form.location} onChange={v => set("location", v)} options={LOCATIONS} /></Field>
+        <Field label="CATEGORY"><SelectField ariaLabel="Category" value={catalogs ? form.categoryId : form.category} onChange={v => set(catalogs ? "categoryId" : "category", v)} options={catalogs ? catalogOptions(catalogs.categories, initial.categoryId, initial.category) : CATEGORIES} /></Field>
+        <Field label={catalogs ? "PREFERRED ROOM" : "LOCATION"}><SelectField ariaLabel="Location" value={catalogs ? form.locationId : form.location} onChange={v => set(catalogs ? "locationId" : "location", v)} options={catalogs ? catalogOptions(catalogs.locations, initial.locationId, initial.locationName) : LOCATIONS} /></Field>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <Field label="SIZE"><input style={inputStyle} value={form.size} onChange={e => set("size", e.target.value)} placeholder="e.g. 1.7 fl oz" /></Field>
@@ -317,6 +328,7 @@ function ItemForm({ initial = {}, onSave, onClose }) {
           {REPLENISHMENT_DESCRIPTION[form.replenishmentPolicy]}
         </div>
       </Field>
+      {catalogs && <p style={{ fontSize: 11, color: "#a5b4fc", marginBottom: 10 }}>Preferred room is used for future unassigned stock. Existing stock stays in its current containers; use Manage storage to move it.</p>}
       <Field label="NOTES"><input style={inputStyle} value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Optional notes" /></Field>
       {saveError && (
         <div role="alert" style={{ padding: "9px 11px", borderRadius: 8, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#fca5a5", fontSize: 11, fontFamily: "monospace" }}>
@@ -721,7 +733,7 @@ function OrderModal({ item, order, containers, today, onChanged, onRefreshRequir
   );
 }
 
-function ItemCard({ item, today, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload }) {
+function ItemCard({ item, today, catalogs = null, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload }) {
   const [editing, setEditing] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const [showOrder, setShowOrder] = useState(false);
@@ -883,7 +895,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
               {allocationError ? (
                 <div style={{ fontSize: 11, marginTop: 4, color: "#fca5a5" }}>Storage unavailable · reload before editing</div>
               ) : stored.length === 0 ? (
-                <div style={{ fontSize: 11, marginTop: 4, color: "#facc15" }}>No container allocation · {item.location}</div>
+                <div style={{ fontSize: 11, marginTop: 4, color: "#facc15" }}>No container allocation · {catalogs ? `Preferred room: ${item.locationName || item.location}` : item.location}</div>
               ) : (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
                   {stored.map(row => (
@@ -954,7 +966,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
 
       {editing && (
         <Modal title="Edit Item" onClose={() => setEditing(false)}>
-          <ItemForm initial={item} onSave={handleEdit} onClose={() => setEditing(false)} />
+          <ItemForm catalogs={catalogs} initial={item} onSave={handleEdit} onClose={() => setEditing(false)} />
         </Modal>
       )}
 
@@ -973,10 +985,12 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
   );
 }
 
-export default function HomeOS() {
+export default function HomeOS({ catalogAdapter = null } = {}) {
   const today = useLocalToday();
   const [items, setItems] = useState([]);
   const [locations, setLocations] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [catalogUnavailable, setCatalogUnavailable] = useState(false);
   const [containers, setContainers] = useState([]);
   const [orders, setOrders] = useState([]);
   const [allocationsByItem, setAllocationsByItem] = useState({});
@@ -991,8 +1005,27 @@ export default function HomeOS() {
   const [adding, setAdding] = useState(false);
   const [tab, setTab] = useState("inventory");
 
+  const applyCatalogSnapshot = useCallback(snapshot => {
+    setCategories(snapshot.categories);
+    setLocations(snapshot.locations);
+    setItems(snapshot.items);
+    setContainers(snapshot.containers);
+    setOrders(snapshot.orders);
+    setStats(snapshot.stats);
+    setAllocationsByItem(snapshot.allocationsByItem);
+    setAllocationErrors({});
+    setFilterCat(current => current === "all" || snapshot.categories.some(row => row.id === current && isAssignable(row)) ? current : "all");
+    setFilterLoc(current => current === "all" || snapshot.locations.some(row => row.id === current && isAssignable(row)) ? current : "all");
+    setError(null);
+    setLoading(false);
+  }, []);
+
   const loadAll = useCallback(async ({ throwOnError = false } = {}) => {
     try {
+      if (CATALOGS_ENABLED) {
+        applyCatalogSnapshot(await (catalogAdapter || getCatalogAdapter()).load());
+        return;
+      }
       const [data, statsData, locationData, containerData, orderData] = await Promise.all([
         apiFetch("/items"),
         apiFetch("/stats"),
@@ -1023,7 +1056,7 @@ export default function HomeOS() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyCatalogSnapshot, catalogAdapter]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
@@ -1086,12 +1119,12 @@ export default function HomeOS() {
 
   const ordersByItem = openOrderMap(orders);
   const filtered = items.filter(i => {
-    if (filterCat !== "all" && i.category !== filterCat) return false;
+    if (filterCat !== "all" && (CATALOGS_ENABLED ? i.categoryId : i.category) !== filterCat) return false;
     const effectiveStatus = ordersByItem.has(i.id) ? "awaiting_shipment" : i.status;
     if (filterStatus !== "all" && effectiveStatus !== filterStatus) return false;
     if (filterLoc !== "all") {
       const itemRows = positiveAllocations(allocationRows(allocationsByItem[i.id] || [], containers));
-      if (!itemRows.some(row => row.locationName === filterLoc) && i.location !== filterLoc) return false;
+      if (CATALOGS_ENABLED ? (!itemRows.some(row => row.locationId === filterLoc) && i.locationId !== filterLoc) : (!itemRows.some(row => row.locationName === filterLoc) && i.location !== filterLoc)) return false;
     }
     if (!search) return true;
     const query = search.toLowerCase();
@@ -1121,12 +1154,14 @@ export default function HomeOS() {
 
   const tabs = [
     { key: "inventory", label: "Inventory" },
+    ...(CATALOG_MANAGEMENT_ENABLED ? [{ key: "settings", label: "Settings" }] : []),
     { key: "orders", label: `Orders${needToOrder.length + awaitingShipment.length > 0 ? ` (${needToOrder.length + awaitingShipment.length})` : ""}` },
   ];
 
   const locationNames = locations.filter(location => location.isActive).map(location => location.name);
   const itemCardProps = item => ({
     item,
+    catalogs: CATALOGS_ENABLED ? { categories, locations } : null,
     today,
     order: ordersByItem.get(item.id) || null,
     allocations: allocationsByItem[item.id] || [],
@@ -1219,7 +1254,7 @@ export default function HomeOS() {
               {stats ? `${stats.total_items} items · ${stats.total_units} units` : "Loading..."}
             </div>
           </div>
-          <button onClick={() => setAdding(true)} style={{
+          <button disabled={CATALOGS_ENABLED && (loading || !!error || catalogUnavailable || tab === "settings")} onClick={() => setAdding(true)} style={{
             background: "#818cf8", color: "#000", border: "none", borderRadius: 8,
             padding: "8px 16px", fontSize: 12, fontFamily: "monospace", fontWeight: 700,
           }}>+ Add Item</button>
@@ -1266,7 +1301,7 @@ export default function HomeOS() {
         {/* Tabs */}
         <div style={{ display: "flex" }}>
           {tabs.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)} style={{
+            <button key={t.key} disabled={catalogUnavailable && t.key !== "settings"} onClick={() => setTab(t.key)} style={{
               background: "none", border: "none", padding: "7px 12px", fontSize: 11,
               fontFamily: "monospace", color: tab === t.key ? "#fff" : "rgba(255,255,255,0.3)",
               borderBottom: tab === t.key ? "2px solid #818cf8" : "2px solid transparent",
@@ -1285,6 +1320,8 @@ export default function HomeOS() {
           <button disabled={loading} onClick={reloadAll} style={{ ...orderButtonStyle, width: "100%", marginTop: 8, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#fff" }}>{loading ? "Reloading…" : "Reload data"}</button>
         </div>}
 
+        {CATALOG_MANAGEMENT_ENABLED && tab === "settings" && <CatalogManager adapter={catalogAdapter || getCatalogAdapter()} onSnapshot={applyCatalogSnapshot} onAvailabilityChange={setCatalogUnavailable} />}
+
         {/* INVENTORY TAB */}
         {tab === "inventory" && (
           <>
@@ -1297,14 +1334,14 @@ export default function HomeOS() {
                   ariaLabel="Filter by category"
                   value={filterCat}
                   onChange={setFilterCat}
-                  options={[{ value: "all", label: "All Categories" }, ...CATEGORIES.map(category => ({ value: category, label: category }))]}
+                  options={[{ value: "all", label: "All Categories" }, ...(CATALOGS_ENABLED ? categories.filter(isAssignable).map(category => ({ value: category.id, label: category.name })) : CATEGORIES.map(category => ({ value: category, label: category })))]}
                   style={{ flex: 1, fontSize: 11 }}
                 />
                 <AnchoredSelect
                   ariaLabel="Filter by location"
                   value={filterLoc}
                   onChange={setFilterLoc}
-                  options={[{ value: "all", label: "All Locations" }, ...locationNames.map(location => ({ value: location, label: location }))]}
+                  options={[{ value: "all", label: "All Locations" }, ...(CATALOGS_ENABLED ? locations.filter(isAssignable).map(location => ({ value: location.id, label: location.name })) : locationNames.map(location => ({ value: location, label: location })))]}
                   style={{ flex: 1, fontSize: 11 }}
                 />
                 <AnchoredSelect
@@ -1387,7 +1424,7 @@ export default function HomeOS() {
 
       {adding && (
         <Modal title="Add Item" onClose={() => setAdding(false)}>
-          <ItemForm onSave={addItem} onClose={() => setAdding(false)} />
+          <ItemForm catalogs={CATALOGS_ENABLED ? { categories, locations } : null} onSave={addItem} onClose={() => setAdding(false)} />
         </Modal>
       )}
     </div>

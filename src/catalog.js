@@ -48,3 +48,17 @@ export function catalogConflictMessage(error) {
   if (error.code === "HOME_OS_CATALOG_NAME_CONFLICT") return "That name is reserved by an existing or historical value. Reload and choose another name.";
   return error.message || "Values changed elsewhere. Reload before making another change.";
 }
+
+export function catalogOptions(records, currentId, currentName) {
+  const choices = records.filter(isAssignable).map(record => ({ value: record.id, label: record.name }));
+  if (currentId && !choices.some(choice => choice.value === currentId)) {
+    const record = records.find(candidate => candidate.id === currentId);
+    choices.unshift({ value: currentId, label: `${record?.name || currentName || currentId} (unavailable · unchanged)` });
+  }
+  return [{ value: "", label: "Choose a value" }, ...choices];
+}
+
+export function canonicalItemPayload(form, initial, catalogs) {
+  const { category, location, categoryId, locationId, ...fields } = form;
+  return { ...fields, ...canonicalItemReferences({ categoryId, locationId }, initial?.id ? initial : null, catalogs) };
+}

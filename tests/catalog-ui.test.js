@@ -7,21 +7,32 @@ import { JSDOM } from "jsdom";
 import { createCatalogFixture } from "../fixtures/catalog/model.js";
 import { validateCatalogName, validateReplacement } from "../src/catalog.js";
 
-async function fixture() {
+async function fixture({ app = false, enabled = true, management = true } = {}) {
   const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost/", pretendToBeVisual: true });
   const originals = new Map();
-  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true })) {
+  for (const [key, value] of Object.entries({ window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement, requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), IS_REACT_ACT_ENVIRONMENT: true })) {
     originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
   }
+  dom.window.scrollTo = () => {};
   dom.window.HTMLDialogElement.prototype.showModal = function () { this.open = true; };
   dom.window.HTMLDialogElement.prototype.close = function () { this.open = false; };
-  const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, watch: null, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] } });
-  const { default: Manager } = await server.ssrLoadModule("/src/CatalogManager.jsx");
+  const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, watch: null, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] }, define: { "import.meta.env.VITE_HOME_CATALOGS": JSON.stringify(String(app && enabled)), "import.meta.env.VITE_HOME_CATALOG_MANAGEMENT": JSON.stringify(String(management)) } });
+  const { default: Manager } = await server.ssrLoadModule(app ? "/src/App.jsx" : "/src/CatalogManager.jsx");
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(document.getElementById("root"));
   const adapter = createCatalogFixture();
-  await act(async () => root.render(createElement(Manager, { adapter })));
+  const originalFetch = globalThis.fetch;
+  const itemTransport = adapter;
+  // App item writes use its existing JSON transport; catalog requests use the
+  // injected adapter. Both are isolated; no network request can escape the test.
+  globalThis.fetch = async (url, options = {}) => {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/^\/home-os/, "") + parsed.search;
+    const data = await itemTransport.request(path, options);
+    return new Response(JSON.stringify(data), { status: 200 });
+  };
+  await act(async () => root.render(createElement(Manager, app ? { catalogAdapter: adapter } : { adapter })));
   const button = name => [...document.querySelectorAll("button")].find(el => (el.getAttribute("aria-label") || el.textContent) === name);
   const click = async name => { const el = button(name); assert.ok(el, name); await act(async () => el.click()); };
   const change = async (selector, value) => {
@@ -32,8 +43,8 @@ async function fixture() {
       el.dispatchEvent(new dom.window.Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
     });
   };
-  return { adapter, button, click, change, dom, async close() {
-    await act(async () => root.unmount()); await server.close(); dom.window.close();
+  return { adapter, itemTransport, button, click, change, dom, async close() {
+    await act(async () => root.unmount()); await server.close(); dom.window.close(); globalThis.fetch = originalFetch;
     for (const [key, descriptor] of originals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; }
   } };
 }
@@ -144,4 +155,79 @@ test("catalog manager fixture interactions", async t => {
       } finally { await f.close(); }
     });
   }
+});
+
+
+test("inventory catalog rollout integration", async t => {
+  await t.test("emergency management gate retains canonical item forms", async () => {
+    const f = await fixture({ app: true, management: false }); try {
+      assert.equal(f.button("Settings"), undefined);
+      await f.click("+ Add Item");
+      assert.match(f.button("Category").textContent, /Choose a value/);
+      assert.match(document.body.textContent, /Preferred room is used/);
+    } finally { await f.close(); }
+  });
+  await t.test("new item requires explicit catalog choices and sends only canonical IDs", async () => {
+    const f = await fixture({ app: true }); try {
+      await f.click("+ Add Item");
+      await f.change('input[placeholder="e.g. Ultra Facial Cream"]', "Fixture lotion");
+      await f.click("Save Item");
+      assert.match(document.body.textContent, /Choose an active category/);
+      assert.equal(f.adapter.writes.length, 0);
+      await f.click("Category"); await f.click("Hair Care");
+      await f.click("Location"); await f.click("Office");
+      await f.click("Save Item");
+      const write = f.adapter.writes[0];
+      assert.equal(write.path, "/items");
+      assert.equal(write.body.categoryId, "hair"); assert.equal(write.body.locationId, "office");
+      assert.equal("category" in write.body, false); assert.equal("location" in write.body, false);
+    } finally { await f.close(); }
+  });
+  await t.test("replacement deletion clears removed filter; unresolved catalog changes block leaving settings", async () => {
+    const f = await fixture({ app: true }); try {
+      await f.click("Filter by category"); await f.click("Skin Care");
+      await f.click("Settings"); await f.click("Delete Skin Care");
+      await f.change("dialog select", "hair"); await f.click("Delete and save");
+      await f.click("Inventory");
+      assert.match(f.button("Filter by category").textContent, /All Categories/);
+      assert.match(document.body.textContent, /Face cream/);
+      await f.click("Settings"); f.adapter.configure({ failure: "lost-response" });
+      await f.click("Rename Hair Care"); await f.change("dialog input", "Hair products"); await f.click("Save");
+      assert.equal(f.button("Inventory").disabled, true);
+      assert.equal(f.button("+ Add Item").disabled, true);
+      await f.click("Resolve pending change");
+      assert.equal(f.button("Inventory").disabled, false);
+      await f.click("Inventory"); assert.match(document.body.textContent, /Hair products/);
+    } finally { await f.close(); }
+  });
+  await t.test("flag on: settings rename preserves ID filter and canonical item edit preserves stock", async () => {
+    const f = await fixture({ app: true }); try {
+      await f.click("Filter by category");
+      await f.click("Skin Care");
+      await f.click("Settings");
+      await f.click("Rename Skin Care"); await f.change("dialog input", "Face Care"); await f.click("Save");
+      await f.click("Inventory");
+      assert.match(f.button("Filter by category").textContent, /Face Care/);
+      assert.match(document.body.textContent, /Face cream/);
+      await f.click("Edit");
+      await f.click("Location"); await f.click("Walk-in Closet");
+      await f.click("Save Item");
+      const write = f.itemTransport.writes.at(-1);
+      assert.equal(write.method, "PATCH");
+      assert.equal(write.body.locationId, "closet");
+      assert.equal("location" in write.body, false);
+      assert.equal("category" in write.body, false);
+      assert.equal("categoryId" in write.body, false); // unchanged dimension omitted
+      assert.deepEqual(f.itemTransport.state.allocationsByItem.cream, [{ containerId: "office-default", quantity: 2 }]);
+    } finally { await f.close(); }
+  });
+  await t.test("flag off retains legacy forms and hides settings", async () => {
+    const f = await fixture({ app: true, enabled: false }); try {
+      assert.equal(f.button("Settings"), undefined);
+      await f.click("+ Add Item");
+      assert.match(f.button("Category").textContent, /Skin Care/);
+      assert.match(f.button("Location").textContent, /Walk-in Closet/);
+      assert.equal(document.body.textContent.includes("Preferred room is used"), false);
+    } finally { await f.close(); }
+  });
 });

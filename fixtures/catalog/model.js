@@ -21,7 +21,7 @@ export function createCatalogTransport() {
   const state = {
     categories: [row("skin", "Skin Care", 2), row("hair", "Hair Care"), row("retired", "Retired category", 0, 0, { isActive: false, deletedAt: "2026-01-01" })],
     locations: [row("office", "Office", 2, 2), row("closet", "Walk-in Closet", 0, 1), row("kitchen", "Kitchen", 0, 1, { isProtected: true }), row("inactive", "Inactive room", 0, 0, { isActive: false })],
-    items: [{ id: "cream", name: "Face cream", categoryId: "skin", category: "Skin Care", locationId: "office", locationName: "Office", location: "Office" }, { id: "wash", name: "Face wash", categoryId: "skin", category: "Skin Care", locationId: "office", locationName: "Office", location: "Office" }],
+    items: [{ id: "cream", name: "Face cream", quantity: 2, reorder_at: 1, status: "normal", categoryId: "skin", category: "Skin Care", locationId: "office", locationName: "Office", location: "Office" }, { id: "wash", name: "Face wash", quantity: 1, reorder_at: 1, status: "need_to_order", categoryId: "skin", category: "Skin Care", locationId: "office", locationName: "Office", location: "Office" }],
     containers: [{ id: "office-default", name: "Unassigned — Office", locationId: "office", isActive: true, isCompatibility: true }, { id: "empty", name: "Empty shelf", locationId: "office", isActive: false }, { id: "closet-default", name: "Unassigned — Closet", locationId: "closet", isActive: true, isCompatibility: true }, { id: "legacy-kitchen", name: "Legacy Kitchen", locationId: "kitchen", isActive: true, isCompatibility: true }],
     orders: [{ id: 1, itemId: "cream", status: "open", remainingQuantity: 3 }],
     allocationsByItem: { cream: [{ containerId: "office-default", quantity: 2 }], wash: [{ containerId: "office-default", quantity: 1 }] },
@@ -41,14 +41,30 @@ export function createCatalogTransport() {
       const method = options.method || "GET";
       if (method === "GET") {
         if (refreshFails) throw error("Fixture reload failed", 503);
-        if (path === "/stats") return { total_items: state.items.length };
+        if (path === "/stats") return { total_items: state.items.length, total_units: state.items.reduce((sum, item) => sum + item.quantity, 0), in_stock: 1, need_to_order: 1, awaiting_shipment: 1 };
         if (path === "/orders?status=open") return structuredClone(state.orders);
         if (/^\/items\/[^/]+\/stock-allocations$/.test(path)) return structuredClone(state.allocationsByItem[path.split("/")[2]] || []);
-        if (["/categories", "/locations", "/items", "/containers"].includes(path)) return structuredClone(state[path.slice(1)]);
+        if (path === "/containers") return structuredClone(state.containers.map(container => ({ ...container, locationName: state.locations.find(location => location.id === container.locationId)?.name })));
+        if (["/categories", "/locations", "/items"].includes(path)) return structuredClone(state[path.slice(1)]);
         throw new Error(`Unexpected fixture GET ${path}`);
       }
       const command = JSON.parse(options.body);
       writes.push({ path, method, body: command });
+      if (path === "/items" || /^\/items\/[^/]+$/.test(path)) {
+        if ((command.categoryId && command.category) || (command.locationId && command.location)) throw error("Ambiguous reference", 400);
+        let item = state.items.find(row => row.id === path.split("/")[2]);
+        if (method === "POST") {
+          item = { id: `item-${nextId++}`, status: "normal" };
+          state.items.push(item);
+          state.allocationsByItem[item.id] = [];
+        }
+        if (!item) throw error("Missing item", 404);
+        Object.assign(item, command);
+        if (command.categoryId) item.category = state.categories.find(row => row.id === command.categoryId).name;
+        if (command.locationId) { item.locationName = state.locations.find(row => row.id === command.locationId).name; item.location = item.locationName; }
+        counts();
+        return structuredClone(item);
+      }
       if (delay) await new Promise(resolve => setTimeout(resolve, delay));
       const signature = JSON.stringify([path, method, command]);
       const previous = ledger.get(command.requestId);
@@ -101,5 +117,5 @@ export function createCatalogTransport() {
 export function createCatalogFixture() {
   const transport = createCatalogTransport();
   const adapter = createCatalogAdapter({ request: transport.request, journal: createMemoryJournal(), enabled: true });
-  return Object.assign(adapter, { writes: transport.writes, configure: transport.configure, state: transport.state });
+  return Object.assign(adapter, { writes: transport.writes, configure: transport.configure, state: transport.state, request: transport.request });
 }
