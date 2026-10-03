@@ -1,3 +1,10 @@
+import { expectedDeliveryDatePayload } from "./delivery.js";
+
+export function updateExpectedDeliveryDate(apiFetch, order, expectedDeliveryDate) {
+  const dates = expectedDeliveryDatePayload(order, expectedDeliveryDate);
+  return apiFetch(`/orders/${order.id}`, { method: "PATCH", body: JSON.stringify(dates) });
+}
+
 // One guard is shared by all order modals. React state alone cannot prevent two
 // clicks in the same render, or a reopen while a request is still in flight.
 export function createOrderMutationGuard() {
