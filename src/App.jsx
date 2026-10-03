@@ -17,10 +17,36 @@ import {
   setAllocationQuantity,
 } from "./storage.js";
 import { anchoredMenuPosition } from "./ui.js";
+import { deliveryDatePayload, deliveryStatus, localDate, millisecondsUntilTomorrow, receiptDatePayload } from "./delivery.js";
+import { createOrderMutationGuard } from "./order-mutations.js";
 
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
 const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_API_TOKEN || "";
+const DELIVERY_TRACKING = import.meta.env.VITE_HOME_DELIVERY_TRACKING === "true";
+const orderMutations = createOrderMutationGuard();
+
+function useLocalToday() {
+  const [today, setToday] = useState(localDate);
+  useEffect(() => {
+    if (!DELIVERY_TRACKING) return undefined;
+    let timer;
+    function update() {
+      clearTimeout(timer);
+      setToday(localDate());
+      timer = setTimeout(update, millisecondsUntilTomorrow() + 50);
+    }
+    update();
+    window.addEventListener("focus", update);
+    document.addEventListener("visibilitychange", update);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("focus", update);
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, []);
+  return today;
+}
 
 const CATEGORIES = ["Skin Care", "Hair Care", "Personal Care", "Cleaning Supplies"];
 const LOCATIONS  = ["Kiehl's Bag", "Walk-in Closet", "Kitchen"];
@@ -57,7 +83,7 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
-function Modal({ title, onClose, children }) {
+function Modal({ title, onClose, busy = false, children }) {
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -103,7 +129,7 @@ function Modal({ title, onClose, children }) {
       <div className="modal-panel">
         <div className="modal-header">
           <div style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{title}</div>
-          <button aria-label={`Close ${title}`} onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", flexShrink: 0 }}>✕</button>
+          <button disabled={busy} aria-label={`Close ${title}`} onClick={onClose} style={{ background: "rgba(255,255,255,0.08)", border: "none", color: "#fff", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", flexShrink: 0 }}>✕</button>
         </div>
         {children}
       </div>
@@ -443,26 +469,48 @@ const orderButtonStyle = {
   fontWeight: 700,
 };
 
-function OrderModal({ item, order, containers, onChanged, onClose }) {
+function OrderDates({ orderedDate, setOrderedDate, expectedDeliveryDate, setExpectedDeliveryDate, legacy = false }) {
+  return (
+    <div className="order-date-fields">
+      <Field label={legacy ? "ORDER DATE (IF KNOWN)" : "ORDER DATE *"}>
+        <input aria-label="Order date" style={{ ...inputStyle, colorScheme: "dark" }} type="date" value={orderedDate} onChange={event => setOrderedDate(event.target.value)} />
+      </Field>
+      <Field label="EXPECTED DELIVERY (OPTIONAL)">
+        <input aria-label="Expected delivery date" style={{ ...inputStyle, colorScheme: "dark" }} type="date" min={orderedDate || undefined} value={expectedDeliveryDate} onChange={event => setExpectedDeliveryDate(event.target.value)} />
+      </Field>
+    </div>
+  );
+}
+
+function OrderModal({ item, order, containers, today, onChanged, onRefreshRequired, onClose }) {
   const [orderedQuantity, setOrderedQuantity] = useState(() => order?.orderedQuantity ?? suggestedOrderQuantity(item));
   const [receiptQuantity, setReceiptQuantity] = useState(() => order?.remainingQuantity ?? 1);
   const [containerId, setContainerId] = useState("");
+  const [orderedDate, setOrderedDate] = useState(() => order ? order.orderedDate || "" : localDate());
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState(() => order?.expectedDeliveryDate || "");
+  const [receivedDate, setReceivedDate] = useState(localDate);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
   const activeContainers = containers.filter(container => container.isActive);
   const legacyAwaiting = !order && item.status === "awaiting_shipment";
   const received = order ? receivedOrderQuantity(order) : 0;
+  const delivery = DELIVERY_TRACKING ? deliveryStatus(order, today) : null;
+  const datesChanged = DELIVERY_TRACKING && (orderedDate !== (order?.orderedDate || "") || expectedDeliveryDate !== (order?.expectedDeliveryDate || ""));
+  const dateFields = <OrderDates orderedDate={orderedDate} setOrderedDate={setOrderedDate} expectedDeliveryDate={expectedDeliveryDate} setExpectedDeliveryDate={setExpectedDeliveryDate} legacy={Boolean(order && !order.orderedDate)} />;
+
+  function close() {
+    if (!orderMutations.pending) onClose();
+  }
 
   async function run(action) {
-    if (working) return;
+    if (orderMutations.pending) return;
     setWorking(true);
     setError("");
     try {
-      await action();
-      await onChanged();
-      onClose();
+      if (await orderMutations.run(action, onChanged)) onClose();
     } catch (nextError) {
       setError(nextError.message || "The order could not be updated.");
+      if (orderMutations.needsRefresh) onRefreshRequired(nextError.message || "The order change could not be verified.");
     } finally {
       setWorking(false);
     }
@@ -474,20 +522,25 @@ function OrderModal({ item, order, containers, onChanged, onClose }) {
       setError("Order quantity must be a whole number greater than zero.");
       return;
     }
-    run(() => apiFetch(`/items/${item.id}/orders`, { method: "POST", body: JSON.stringify({ quantity }) }));
+    try {
+      const dates = DELIVERY_TRACKING ? deliveryDatePayload({ orderedDate, expectedDeliveryDate }) : {};
+      run(() => apiFetch(`/items/${item.id}/orders`, { method: "POST", body: JSON.stringify({ quantity, ...dates }) }));
+    } catch (nextError) { setError(nextError.message); }
   }
 
   function saveCorrection() {
     try {
       const quantity = validateOrderCorrection(order, orderedQuantity);
-      run(() => apiFetch(`/orders/${order.id}`, { method: "PATCH", body: JSON.stringify({ quantity }) }));
+      const dates = DELIVERY_TRACKING ? deliveryDatePayload({ orderedDate, expectedDeliveryDate }, { existingOrder: order }) : {};
+      run(() => apiFetch(`/orders/${order.id}`, { method: "PATCH", body: JSON.stringify({ quantity, ...dates }) }));
     } catch (nextError) { setError(nextError.message); }
   }
 
   function receiveOrder() {
     try {
       const receipt = validateReceipt(order, receiptQuantity, containerId);
-      run(() => apiFetch(`/orders/${order.id}/receive`, { method: "POST", body: JSON.stringify(receipt) }));
+      const date = DELIVERY_TRACKING ? receiptDatePayload(receivedDate) : {};
+      run(() => apiFetch(`/orders/${order.id}/receive`, { method: "POST", body: JSON.stringify({ ...receipt, ...date }) }));
     } catch (nextError) { setError(nextError.message); }
   }
 
@@ -506,8 +559,10 @@ function OrderModal({ item, order, containers, onChanged, onClose }) {
     run(() => apiFetch(`/items/${item.id}`, { method: "PATCH", body: JSON.stringify({ status }) }));
   }
 
+
   return (
-    <Modal title={`Order · ${item.name}`} onClose={onClose}>
+    <Modal title={`Order · ${item.name}`} busy={working} onClose={close}>
+      <fieldset disabled={working || orderMutations.needsRefresh} style={{ border: 0, minWidth: 0 }}>
       {!order ? (
         <>
           {legacyAwaiting && (
@@ -518,7 +573,7 @@ function OrderModal({ item, order, containers, onChanged, onClose }) {
           <Field label="HOW MANY ARE COMING?">
             <input aria-label="Incoming quantity" style={inputStyle} type="number" min={1} step={1} value={orderedQuantity} onChange={event => setOrderedQuantity(event.target.value)} />
           </Field>
-          {error && <div role="alert" style={{ marginBottom: 10, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{error}</div>}
+          {DELIVERY_TRACKING && dateFields}
           <button disabled={working} onClick={createOrder} style={{ ...orderButtonStyle, width: "100%", border: 0, background: "#facc15", color: "#111827", opacity: working ? 0.6 : 1 }}>
             {working ? "Saving…" : "Save as already coming"}
           </button>
@@ -543,15 +598,22 @@ function OrderModal({ item, order, containers, onChanged, onClose }) {
             ))}
           </div>
 
+          {DELIVERY_TRACKING && dateFields}
           <Field label="CORRECT TOTAL ORDER QUANTITY">
             <div style={{ display: "flex", gap: 7 }}>
               <input aria-label="Corrected order quantity" style={{ ...inputStyle, flex: 1 }} type="number" min={received + 1} step={1} value={orderedQuantity} onChange={event => setOrderedQuantity(event.target.value)} />
-              <button disabled={working || Number(orderedQuantity) === order.orderedQuantity} onClick={saveCorrection} style={{ ...orderButtonStyle, border: "1px solid rgba(129,140,248,0.35)", background: "rgba(129,140,248,0.14)", color: "#c7d2fe" }}>Save correction</button>
+              <button disabled={working || (Number(orderedQuantity) === order.orderedQuantity && !datesChanged)} onClick={saveCorrection} style={{ ...orderButtonStyle, border: "1px solid rgba(129,140,248,0.35)", background: "rgba(129,140,248,0.14)", color: "#c7d2fe" }}>{DELIVERY_TRACKING ? "Save order changes" : "Save correction"}</button>
             </div>
           </Field>
 
           <div style={{ marginTop: 14, padding: 12, borderRadius: 10, background: "rgba(74,222,128,0.06)", border: "1px solid rgba(74,222,128,0.18)" }}>
-            <div style={{ fontSize: 10, color: "#86efac", fontFamily: "monospace", fontWeight: 700, marginBottom: 9 }}>RECEIVE STOCK</div>
+            <div style={{ fontSize: 10, color: "#86efac", fontFamily: "monospace", fontWeight: 700, marginBottom: 9 }}>{delivery?.needsConfirmation ? "DID THIS ARRIVE?" : "RECEIVE STOCK"}</div>
+            {DELIVERY_TRACKING && <>
+              <p style={{ color: "rgba(255,255,255,0.6)", fontSize: 11, lineHeight: 1.5, marginBottom: 10 }}>Only confirm stock that actually arrived. For a partial delivery, enter just the quantity received. The rest stays incoming.</p>
+              <Field label="ACTUAL ARRIVAL DATE *">
+                <input aria-label="Actual arrival date" style={{ ...inputStyle, colorScheme: "dark" }} type="date" value={receivedDate} onChange={event => setReceivedDate(event.target.value)} />
+              </Field>
+            </>}
             <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 7 }}>
               <input aria-label="Quantity received" style={inputStyle} type="number" min={1} max={order.remainingQuantity} step={1} value={receiptQuantity} onChange={event => setReceiptQuantity(event.target.value)} />
               <AnchoredSelect
@@ -562,22 +624,24 @@ function OrderModal({ item, order, containers, onChanged, onClose }) {
               />
             </div>
             <button disabled={working} onClick={receiveOrder} style={{ ...orderButtonStyle, width: "100%", marginTop: 8, border: 0, background: "#4ade80", color: "#052e16" }}>
-              {working ? "Saving…" : `Receive ${receiptQuantity || 0} into stock`}
+              {working ? "Saving…" : `${DELIVERY_TRACKING ? "Confirm arrival · receive" : "Receive"} ${receiptQuantity || 0} into stock`}
             </button>
           </div>
 
-          {error && <div role="alert" style={{ marginTop: 10, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>{error}</div>}
           <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
             <button disabled={working} onClick={cancelOrder} style={{ ...orderButtonStyle, flex: 1, border: "1px solid rgba(250,204,21,0.28)", background: "rgba(250,204,21,0.08)", color: "#fde68a" }}>Cancel remaining</button>
             <button disabled={working} onClick={removeOrder} style={{ ...orderButtonStyle, flex: 1, border: "1px solid rgba(248,113,113,0.25)", background: "transparent", color: "#fca5a5" }}>Entered incorrectly</button>
           </div>
         </>
       )}
+      </fieldset>
+      {error && <div role="alert" style={{ marginTop: 10, color: "#fca5a5", fontSize: 11, fontFamily: "monospace", lineHeight: 1.5 }}>{error}</div>}
+
     </Modal>
   );
 }
 
-function ItemCard({ item, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onReload }) {
+function ItemCard({ item, today, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload }) {
   const [editing, setEditing] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const [showOrder, setShowOrder] = useState(false);
@@ -594,6 +658,7 @@ function ItemCard({ item, order = null, allocations = [], allocationError = fals
   const statusLabel = order ? `Already coming · ${order.remainingQuantity}` : STATUS_LABEL[item.status];
   const rows = allocationRows(allocations, containers);
   const stored = positiveAllocations(rows);
+  const delivery = DELIVERY_TRACKING ? deliveryStatus(order, today) : null;
 
   function openStorage(intent = "manage") {
     setActionError("");
@@ -718,6 +783,18 @@ function ItemCard({ item, order = null, allocations = [], allocationError = fals
               )}
             </div>
 
+            {DELIVERY_TRACKING && order && (
+              <div style={{ marginTop: 9, padding: "9px 10px", borderRadius: 8, background: delivery?.needsConfirmation ? "rgba(250,204,21,0.08)" : "rgba(255,255,255,0.03)", color: "rgba(255,255,255,0.58)", fontSize: 10, fontFamily: "monospace", lineHeight: 1.6 }}>
+                <div>Ordered {order.orderedDate || "date not recorded"} · {delivery?.label || (order.expectedDeliveryDate ? `Expected ${order.expectedDeliveryDate}` : "Delivery date not set")}</div>
+                {delivery?.needsConfirmation && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                    <span style={{ color: "#fde68a", fontWeight: 700 }}>Did this arrive?</span>
+                    <button aria-label={`Confirm arrival for ${item.name}`} onClick={() => setShowOrder(true)} style={{ ...orderButtonStyle, minHeight: 32, padding: "6px 9px", border: "1px solid rgba(250,204,21,0.3)", background: "rgba(250,204,21,0.12)", color: "#fde68a" }}>Record what arrived →</button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <button disabled={allocationError} onClick={() => openStorage("manage")} aria-label={`Manage storage for ${item.name}`} style={{ width: "100%", marginTop: 8, padding: "8px 9px", textAlign: "left", borderRadius: 8, border: "1px solid rgba(129,140,248,0.18)", background: "rgba(129,140,248,0.06)", color: "inherit", opacity: allocationError ? 0.65 : 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
                 <span style={{ fontSize: 9, fontFamily: "monospace", letterSpacing: "0.08em", color: "rgba(255,255,255,0.35)" }}>STORED IN</span>
@@ -806,7 +883,9 @@ function ItemCard({ item, order = null, allocations = [], allocationError = fals
           item={item}
           order={order}
           containers={containers}
+          today={today}
           onChanged={onOrderChanged}
+          onRefreshRequired={onOrderRefreshRequired}
           onClose={() => setShowOrder(false)}
         />
       )}
@@ -815,6 +894,7 @@ function ItemCard({ item, order = null, allocations = [], allocationError = fals
 }
 
 export default function HomeOS() {
+  const today = useLocalToday();
   const [items, setItems] = useState([]);
   const [locations, setLocations] = useState([]);
   const [containers, setContainers] = useState([]);
@@ -831,14 +911,14 @@ export default function HomeOS() {
   const [adding, setAdding] = useState(false);
   const [tab, setTab] = useState("inventory");
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async ({ throwOnError = false } = {}) => {
     try {
       const [data, statsData, locationData, containerData, orderData] = await Promise.all([
         apiFetch("/items"),
         apiFetch("/stats"),
         apiFetch("/locations"),
         apiFetch("/containers"),
-        apiFetch("/orders?status=open").catch(nextError => nextError.status === 404 ? [] : Promise.reject(nextError)),
+        apiFetch("/orders?status=open").catch(nextError => nextError.status === 404 && !throwOnError && !DELIVERY_TRACKING ? [] : Promise.reject(nextError)),
       ]);
       const allocationResults = await Promise.allSettled(
         data.map(item => apiFetch(`/items/${item.id}/stock-allocations`)),
@@ -859,12 +939,25 @@ export default function HomeOS() {
       setError(null);
     } catch (e) {
       setError(e.message);
+      if (throwOnError) throw e;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  async function reloadAll() {
+    if (orderMutations.pending) return;
+    setLoading(true);
+    try {
+      await orderMutations.refresh(() => loadAll({ throwOnError: true }));
+    } catch (nextError) {
+      setError(nextError.message || "Data could not be refreshed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   function updateItem(updated) {
     setItems(prev => prev.map(i => i.id === updated.id ? updated : i));
@@ -948,6 +1041,7 @@ export default function HomeOS() {
   const locationNames = locations.filter(location => location.isActive).map(location => location.name);
   const itemCardProps = item => ({
     item,
+    today,
     order: ordersByItem.get(item.id) || null,
     allocations: allocationsByItem[item.id] || [],
     allocationError: Boolean(allocationErrors[item.id]),
@@ -955,7 +1049,8 @@ export default function HomeOS() {
     onUpdate: updateItem,
     onDelete: deleteItem,
     onReplaceAllocations: replaceItemAllocations,
-    onOrderChanged: loadAll,
+    onOrderChanged: () => loadAll({ throwOnError: true }),
+    onOrderRefreshRequired: setError,
     onReload: loadAll,
   });
 
@@ -968,6 +1063,9 @@ export default function HomeOS() {
     <div style={{ minHeight: "100vh", background: "#09090e", color: "#e2e8f0", fontFamily: "system-ui, sans-serif", overflowY: "auto" }}>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        .order-date-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .order-date-fields input { min-width: 0; }
+        @media (max-width: 480px) { .order-date-fields { grid-template-columns: minmax(0, 1fr); } }
         ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); }
         html, body, #root { height: 100%; }
@@ -1095,6 +1193,12 @@ export default function HomeOS() {
       {/* Scrollable content */}
       <div style={{ padding: "14px 16px 40px", maxWidth: 680, margin: "0 auto" }}>
 
+        {error && <div role="alert" style={{ padding: 16, marginBottom: 14, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10, color: "#fca5a5", fontFamily: "monospace", fontSize: 12, lineHeight: 1.5 }}>
+          Data could not be refreshed: {error}
+          {orderMutations.needsRefresh && <p style={{ marginTop: 6 }}>Your last change may already be saved. Reload and review the latest quantities before making another change.</p>}
+          <button disabled={loading} onClick={reloadAll} style={{ ...orderButtonStyle, width: "100%", marginTop: 8, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#fff" }}>{loading ? "Reloading…" : "Reload data"}</button>
+        </div>}
+
         {/* INVENTORY TAB */}
         {tab === "inventory" && (
           <>
@@ -1138,7 +1242,6 @@ export default function HomeOS() {
             </div>
 
             {loading && <div style={{ textAlign: "center", padding: 40, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>Loading...</div>}
-            {error && <div style={{ padding: 16, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 10, color: "#f87171", fontFamily: "monospace", fontSize: 12 }}>⚠ {error}</div>}
 
             {!loading && !error && (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -1159,7 +1262,7 @@ export default function HomeOS() {
         )}
 
         {/* ORDERS TAB */}
-        {tab === "orders" && (
+        {tab === "orders" && !error && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {needToOrder.length === 0 && awaitingShipment.length === 0 ? (
               <div style={{ textAlign: "center", padding: 60 }}>
