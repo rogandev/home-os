@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { SupplyPanel, SupplySettings } from "./SupplyPanel.jsx";
 import { createPortal } from "react-dom";
 import { editableItemValues, replenishmentPolicyFor } from "./replenishment.js";
 import {
@@ -23,13 +24,14 @@ import { createOrderMutationGuard, updateExpectedDeliveryDate } from "./order-mu
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
 const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_API_TOKEN || "";
+const SUPPLY_TRACKING = import.meta.env.VITE_HOME_SUPPLY_TRACKING === "true";
 const DELIVERY_TRACKING = import.meta.env.VITE_HOME_DELIVERY_TRACKING === "true";
 const orderMutations = createOrderMutationGuard();
 
 function useLocalToday() {
   const [today, setToday] = useState(localDate);
   useEffect(() => {
-    if (!DELIVERY_TRACKING) return undefined;
+    if (!DELIVERY_TRACKING && !SUPPLY_TRACKING) return undefined;
     let timer;
     function update() {
       clearTimeout(timer);
@@ -721,7 +723,7 @@ function OrderModal({ item, order, containers, today, onChanged, onRefreshRequir
   );
 }
 
-function ItemCard({ item, today, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload }) {
+function ItemCard({ item, today, supplyData, onSupplyRefresh, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload }) {
   const [editing, setEditing] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const [showOrder, setShowOrder] = useState(false);
@@ -739,6 +741,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
   const rows = allocationRows(allocations, containers);
   const stored = positiveAllocations(rows);
   const delivery = DELIVERY_TRACKING ? deliveryStatus(order, today) : null;
+  const usesSupply = SUPPLY_TRACKING && supplyData && (supplyData.profiles.some(p => p.itemId === item.id) || supplyData.usage.some(u => u.itemId === item.id) || supplyData.subscriptions.some(s => s.itemId === item.id));
 
   function openStorage(intent = "manage") {
     setActionError("");
@@ -842,9 +845,9 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", lineHeight: 1.3 }}>{item.name}</div>
                 {item.brand && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontFamily: "monospace", marginTop: 1 }}>{item.brand}</div>}
               </div>
-              <div aria-label={`${item.quantity} units in stock`} style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+              <div aria-label={`${item.quantity} ${usesSupply ? (item.quantity === 1 ? "spare" : "spares") : "units in stock"}`} style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
                 <span style={{ fontSize: 18, fontWeight: 750, color: statusColor, fontFamily: "monospace", minWidth: 20, textAlign: "right" }}>{item.quantity}</span>
-                <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>units</span>
+                <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>{usesSupply ? (item.quantity === 1 ? "spare" : "spares") : "units"}</span>
               </div>
             </div>
 
@@ -896,9 +899,9 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
             </button>
 
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              <button disabled={working || item.quantity <= 0} aria-label={`Use one ${item.name}`} onClick={decrement} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(129,140,248,0.14)", border: "1px solid rgba(129,140,248,0.32)", color: "#a5b4fc", borderRadius: 7, cursor: item.quantity <= 0 ? "not-allowed" : "pointer", opacity: working || item.quantity <= 0 ? 0.45 : 1, fontFamily: "monospace", fontWeight: 700 }}>
+              {!usesSupply && <button disabled={working || item.quantity <= 0} aria-label={`Use one ${item.name}`} onClick={decrement} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(129,140,248,0.14)", border: "1px solid rgba(129,140,248,0.32)", color: "#a5b4fc", borderRadius: 7, cursor: item.quantity <= 0 ? "not-allowed" : "pointer", opacity: working || item.quantity <= 0 ? 0.45 : 1, fontFamily: "monospace", fontWeight: 700 }}>
                 Use 1
-              </button>
+              </button>}
               <button disabled={working} aria-label={`Add one ${item.name}`} onClick={increment} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.72)", borderRadius: 7, cursor: "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
                 +1
               </button>
@@ -932,6 +935,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
               <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
               <button onClick={handleDelete} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "transparent", border: "1px solid rgba(248,113,113,0.15)", color: "rgba(248,113,113,0.58)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Delete permanently</button>
             </div>
+            {SUPPLY_TRACKING && supplyData && <SupplyPanel item={item} data={supplyData} order={order} allocations={allocations} containers={containers} today={today} apiFetch={apiFetch} onRefresh={onSupplyRefresh} Modal={Modal} />}
             {actionError && (
               <div role="alert" style={{ marginTop: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>
                 {actionError} {allocationError && <button onClick={onReload} style={{ marginLeft: 5, border: 0, background: "transparent", color: "#c7d2fe", fontFamily: "monospace", textDecoration: "underline" }}>Reload</button>}
@@ -976,6 +980,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
 export default function HomeOS() {
   const today = useLocalToday();
   const [items, setItems] = useState([]);
+  const [supplyData, setSupplyData] = useState(null);
   const [locations, setLocations] = useState([]);
   const [containers, setContainers] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -993,12 +998,13 @@ export default function HomeOS() {
 
   const loadAll = useCallback(async ({ throwOnError = false } = {}) => {
     try {
-      const [data, statsData, locationData, containerData, orderData] = await Promise.all([
+      const [data, statsData, locationData, containerData, orderData, supplyResponse] = await Promise.all([
         apiFetch("/items"),
         apiFetch("/stats"),
         apiFetch("/locations"),
         apiFetch("/containers"),
         apiFetch("/orders?status=open").catch(nextError => nextError.status === 404 && !throwOnError && !DELIVERY_TRACKING ? [] : Promise.reject(nextError)),
+        SUPPLY_TRACKING ? apiFetch("/supply") : Promise.resolve(null),
       ]);
       const allocationResults = await Promise.allSettled(
         data.map(item => apiFetch(`/items/${item.id}/stock-allocations`)),
@@ -1009,6 +1015,7 @@ export default function HomeOS() {
         nextAllocations[item.id] = allocationResults[index].status === "fulfilled" ? allocationResults[index].value : [];
         if (allocationResults[index].status === "rejected") nextAllocationErrors[item.id] = true;
       });
+      setSupplyData(supplyResponse);
       setItems(data);
       setStats(statsData);
       setLocations(locationData);
@@ -1026,6 +1033,13 @@ export default function HomeOS() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => {
+    if (!SUPPLY_TRACKING) return undefined;
+    const refresh = () => { if (document.visibilityState !== "hidden") loadAll(); };
+    window.addEventListener("focus",refresh);
+    document.addEventListener("visibilitychange",refresh);
+    return () => { window.removeEventListener("focus",refresh);document.removeEventListener("visibilitychange",refresh); };
+  }, [loadAll]);
 
   async function reloadAll() {
     if (orderMutations.pending) return;
@@ -1126,6 +1140,7 @@ export default function HomeOS() {
 
   const locationNames = locations.filter(location => location.isActive).map(location => location.name);
   const itemCardProps = item => ({
+    supplyData, onSupplyRefresh: () => loadAll({ throwOnError: true }),
     item,
     today,
     order: ordersByItem.get(item.id) || null,
@@ -1289,6 +1304,7 @@ export default function HomeOS() {
         {tab === "inventory" && (
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+              {SUPPLY_TRACKING && supplyData && <SupplySettings settings={supplyData.settings} apiFetch={apiFetch} onRefresh={() => loadAll({ throwOnError: true })} />}
               <input aria-label="Search inventory" value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search items, brands, or containers..."
                 style={{ ...inputStyle, fontSize: 12 }} />
