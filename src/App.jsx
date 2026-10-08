@@ -1,4 +1,8 @@
+import CatalogManager from "./CatalogManager.jsx";
+import { createCatalogAdapter, createIndexedDBCatalogJournal } from "./catalog-adapter.js";
+import { canonicalItemPayload, catalogOptions, isAssignable } from "./catalog.js";
 import { useState, useEffect, useCallback, useRef } from "react";
+import { SupplyPanel, SupplySettings } from "./SupplyPanel.jsx";
 import { createPortal } from "react-dom";
 import { editableItemValues, replenishmentPolicyFor } from "./replenishment.js";
 import {
@@ -19,17 +23,28 @@ import {
 import { anchoredMenuPosition } from "./ui.js";
 import { deliveryDatePayload, deliveryStatus, dueDeliveryOrders, expectedDeliveryDatePayload, localDate, millisecondsUntilTomorrow, receiptDatePayload } from "./delivery.js";
 import { createOrderMutationGuard, updateExpectedDeliveryDate } from "./order-mutations.js";
+import { createInventoryCopySaver, inventoryCopyDraft, validateInventoryCopy } from "./inventory-copy.js";
 
 const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
 const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
 const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_API_TOKEN || "";
+const INVENTORY_COPY = import.meta.env.VITE_HOME_INVENTORY_COPY === "true";
+const CATALOGS_ENABLED = import.meta.env.VITE_HOME_CATALOGS === "true";
+const CATALOG_MANAGEMENT_ENABLED = CATALOGS_ENABLED && import.meta.env.VITE_HOME_CATALOG_MANAGEMENT !== "false";
+let sharedCatalogAdapter;
+function getCatalogAdapter() {
+  if (!sharedCatalogAdapter) sharedCatalogAdapter = createCatalogAdapter({ request: apiFetch, journal: createIndexedDBCatalogJournal(`${API}:home-os-shared-account-v1`), enabled: CATALOGS_ENABLED });
+  return sharedCatalogAdapter;
+}
+
+const SUPPLY_TRACKING = import.meta.env.VITE_HOME_SUPPLY_TRACKING === "true";
 const DELIVERY_TRACKING = import.meta.env.VITE_HOME_DELIVERY_TRACKING === "true";
 const orderMutations = createOrderMutationGuard();
 
 function useLocalToday() {
   const [today, setToday] = useState(localDate);
   useEffect(() => {
-    if (!DELIVERY_TRACKING) return undefined;
+    if (!DELIVERY_TRACKING && !SUPPLY_TRACKING) return undefined;
     let timer;
     function update() {
       clearTimeout(timer);
@@ -252,13 +267,27 @@ function SelectField({ value, onChange, options, ariaLabel }) {
   return <AnchoredSelect value={value} onChange={onChange} options={options} ariaLabel={ariaLabel} />;
 }
 
-function ItemForm({ initial = {}, onSave, onClose }) {
-  const [form, setForm] = useState(() => editableItemValues(initial));
+function ItemForm({ initial = {}, onSave, onClose, catalogs = null, copyMode = false, containers = [], onSaveStateChange = () => {} }) {
+  const [form, setForm] = useState(() => ({ ...editableItemValues(initial), ...(catalogs ? { categoryId: initial.categoryId || "", locationId: initial.locationId || "" } : {}) }));
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const [copiedAllocations, setCopiedAllocations] = useState(() => initial.allocations || []);
+  const [locked, setLocked] = useState(false);
+  const savePending = useRef(false);
+  const set = (k, v) => { if (!savePending.current && !locked) setForm(f => ({ ...f, [k]: v })); };
+
+  function changeCopiedAllocation(containerId, value) {
+    if (savePending.current || locked) return;
+    const quantity = Number(value);
+    const next = copiedAllocations.some(row => row.containerId === containerId)
+      ? copiedAllocations.map(row => row.containerId === containerId ? { ...row, quantity } : row)
+      : [...copiedAllocations, { containerId, quantity }];
+    setCopiedAllocations(next);
+    setForm(current => ({ ...current, quantity: allocationTotal(next) }));
+  }
 
   async function handleSave() {
+    if (savePending.current) return;
     if (!form.name.trim()) {
       setSaveError("Give this item a name before saving.");
       return;
@@ -272,35 +301,49 @@ function ItemForm({ initial = {}, onSave, onClose }) {
       return;
     }
     setSaveError("");
+    savePending.current = true;
     setSaving(true);
+    onSaveStateChange(true);
+    let uncertain = locked;
     try {
-      await onSave(form);
+      const payload = catalogs ? canonicalItemPayload(form, copyMode ? null : initial, catalogs) : form;
+      await onSave(copyMode ? { ...payload, allocations: copiedAllocations } : payload);
+      uncertain = false;
     } catch (error) {
-      setSaveError(error.message || "The item could not be saved.");
+      uncertain = copyMode && Boolean(error.uncertain);
+      setLocked(uncertain);
+      setSaveError(uncertain
+        ? "We could not confirm the save. Your draft is held unchanged. Retry to recover this same item safely."
+        : error.message || "The item could not be saved.");
     } finally {
+      savePending.current = false;
       setSaving(false);
+      onSaveStateChange(uncertain);
     }
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      {copyMode && <p style={{ color: "#c7d2fe", fontSize: 12, lineHeight: 1.5, marginBottom: 14 }}>Review this new item and change anything you need. Saving keeps the original unchanged. Orders and history are not copied.</p>}
+      <fieldset disabled={saving || locked} style={{ border: 0, minWidth: 0, padding: 0 }}>
       <Field label="PRODUCT NAME *">
-        <input style={inputStyle} value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Ultra Facial Cream" />
+        <input aria-label="Product name" style={inputStyle} value={form.name} onChange={e => set("name", e.target.value)} placeholder="e.g. Ultra Facial Cream" />
       </Field>
+      <Field label="DESCRIPTION"><input aria-label="Description" style={inputStyle} value={form.description} onChange={e => set("description", e.target.value)} placeholder="Optional description" /></Field>
       <Field label="BRAND">
-        <input style={inputStyle} value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="e.g. Kiehl's" />
+        <input aria-label="Brand" style={inputStyle} value={form.brand} onChange={e => set("brand", e.target.value)} placeholder="e.g. Kiehl's" />
       </Field>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="CATEGORY"><SelectField ariaLabel="Category" value={form.category} onChange={v => set("category", v)} options={CATEGORIES} /></Field>
-        <Field label="LOCATION"><SelectField ariaLabel="Location" value={form.location} onChange={v => set("location", v)} options={LOCATIONS} /></Field>
+      <div className="item-form-columns">
+        <Field label="CATEGORY"><SelectField ariaLabel="Category" value={catalogs ? form.categoryId : form.category} onChange={v => set(catalogs ? "categoryId" : "category", v)} options={catalogs ? catalogOptions(catalogs.categories, initial.categoryId, initial.category) : CATEGORIES} /></Field>
+        <Field label={catalogs ? "PREFERRED ROOM" : "LOCATION"}><SelectField ariaLabel="Location" value={catalogs ? form.locationId : form.location} onChange={v => set(catalogs ? "locationId" : "location", v)} options={catalogs ? catalogOptions(catalogs.locations, initial.locationId, initial.locationName) : LOCATIONS} /></Field>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="SIZE"><input style={inputStyle} value={form.size} onChange={e => set("size", e.target.value)} placeholder="e.g. 1.7 fl oz" /></Field>
-        <Field label="FORM"><input style={inputStyle} value={form.form} onChange={e => set("form", e.target.value)} placeholder="e.g. Tube, Jar" /></Field>
+      <div className="item-form-columns">
+        <Field label="SIZE"><input aria-label="Size" style={inputStyle} value={form.size} onChange={e => set("size", e.target.value)} placeholder="e.g. 1.7 fl oz" /></Field>
+        <Field label="FORM"><input aria-label="Form" style={inputStyle} value={form.form} onChange={e => set("form", e.target.value)} placeholder="e.g. Tube, Jar" /></Field>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <Field label="QUANTITY"><input style={inputStyle} type="number" min={0} value={form.quantity} onChange={e => set("quantity", Number(e.target.value))} /></Field>
-        <Field label="REORDER AT (DEFAULT: 1)"><input style={inputStyle} type="number" min={0} value={form.reorder_at} onChange={e => set("reorder_at", Number(e.target.value))} /></Field>
+      <div className="item-form-columns">
+        <Field label={copyMode ? "QUANTITY (FROM STORAGE)" : "QUANTITY"}><input aria-label="Quantity" readOnly={copyMode} style={inputStyle} type="number" min={0} value={form.quantity} onChange={e => set("quantity", Number(e.target.value))} /></Field>
+        <Field label="REORDER AT (DEFAULT: 1)"><input aria-label="Reorder at" style={inputStyle} type="number" min={0} value={form.reorder_at} onChange={e => set("reorder_at", Number(e.target.value))} /></Field>
       </div>
       <Field label="REPLENISHMENT">
         <AnchoredSelect
@@ -317,7 +360,18 @@ function ItemForm({ initial = {}, onSave, onClose }) {
           {REPLENISHMENT_DESCRIPTION[form.replenishmentPolicy]}
         </div>
       </Field>
-      <Field label="NOTES"><input style={inputStyle} value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Optional notes" /></Field>
+      {catalogs && <p style={{ fontSize: 11, color: "#a5b4fc", marginBottom: 10 }}>Preferred room is used for future unassigned stock. Existing stock stays in its current containers; use Manage storage to move it.</p>}
+      <Field label="NOTES"><input aria-label="Notes" style={inputStyle} value={form.notes} onChange={e => set("notes", e.target.value)} placeholder="Optional notes" /></Field>
+      {copyMode && <Field label="STORAGE · EDIT QUANTITIES FOR THIS COPY">
+        <p style={{ color: "rgba(255,255,255,0.5)", fontSize: 11, lineHeight: 1.5, marginBottom: 8 }}>The location above is the product's default. Stock stays in the containers below; edit these quantities to change its total or storage.</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+          {allocationRows(copiedAllocations, containers).map(row => <label key={row.containerId} className="copy-storage-row" style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: 10 }}>
+            <span style={{ minWidth: 0, overflowWrap: "anywhere", fontSize: 12 }}>{row.containerName}<span style={{ display: "block", color: "rgba(255,255,255,0.42)", fontSize: 10, marginTop: 3 }}>{row.locationName}{!row.isActive ? " · Archived" : ""}</span></span>
+            <input aria-label={`${row.containerName} copy quantity`} style={{ ...inputStyle, width: 74, minHeight: 44 }} type="number" min={0} step={1} disabled={!row.isActive} value={copiedAllocations.find(allocation => allocation.containerId === row.containerId)?.quantity ?? 0} onChange={event => changeCopiedAllocation(row.containerId, event.target.value)} />
+          </label>)}
+        </div>
+      </Field>}
+      </fieldset>
       {saveError && (
         <div role="alert" style={{ padding: "9px 11px", borderRadius: 8, background: "rgba(248,113,113,0.1)", border: "1px solid rgba(248,113,113,0.25)", color: "#fca5a5", fontSize: 11, fontFamily: "monospace" }}>
           {saveError}
@@ -327,9 +381,40 @@ function ItemForm({ initial = {}, onSave, onClose }) {
         marginTop: 8, background: "#818cf8", color: "#000", border: "none", borderRadius: 10,
         padding: "12px", fontSize: 13, fontFamily: "monospace", fontWeight: 700,
         cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.6 : 1,
-      }}>{saving ? "Saving..." : "Save Item"}</button>
+      }}>{saving ? "Saving..." : locked ? "Retry Save Safely" : copyMode ? "Save Copy" : "Save Item"}</button>
+      {copyMode && <button disabled={saving || locked} onClick={onClose} style={{ ...inputStyle, minHeight: 44, marginTop: 6, opacity: saving || locked ? 0.4 : 1 }}>Cancel</button>}
     </div>
   );
+}
+
+function CopyItemModal({ draft, containers, catalogs, onCreated, onClose }) {
+  const saver = useRef(null);
+  if (!saver.current) saver.current = createInventoryCopySaver(async (path, options) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try { return await apiFetch(path, { ...options, signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+  });
+  const blocking = useRef(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    function preventInterruptedSave(event) {
+      if (!blocking.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    }
+    window.addEventListener("beforeunload", preventInterruptedSave);
+    return () => window.removeEventListener("beforeunload", preventInterruptedSave);
+  }, []);
+  function saveStateChanged(value) { blocking.current = value; setBusy(value); }
+  function close() { if (!blocking.current) onClose(); }
+  async function save(values) {
+    const created = await saver.current.save(values);
+    onCreated(created);
+  }
+  return <Modal title="Copy Item" onClose={close} busy={busy}>
+    <ItemForm initial={draft} catalogs={catalogs} containers={containers} copyMode onSave={save} onClose={close} onSaveStateChange={saveStateChanged} />
+  </Modal>;
 }
 
 function StorageModal({ item, allocations, containers, intent, onSave, onClose }) {
@@ -721,7 +806,7 @@ function OrderModal({ item, order, containers, today, onChanged, onRefreshRequir
   );
 }
 
-function ItemCard({ item, today, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload }) {
+function ItemCard({ item, today, supplyData, onSupplyRefresh, catalogs = null, order = null, allocations = [], allocationError = false, containers = [], onUpdate, onDelete, onReplaceAllocations, onOrderChanged, onOrderRefreshRequired, onReload, onCopy }) {
   const [editing, setEditing] = useState(false);
   const [showStorage, setShowStorage] = useState(false);
   const [showOrder, setShowOrder] = useState(false);
@@ -739,6 +824,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
   const rows = allocationRows(allocations, containers);
   const stored = positiveAllocations(rows);
   const delivery = DELIVERY_TRACKING ? deliveryStatus(order, today) : null;
+  const usesSupply = SUPPLY_TRACKING && supplyData && (supplyData.profiles.some(p => p.itemId === item.id) || supplyData.usage.some(u => u.itemId === item.id) || supplyData.subscriptions.some(s => s.itemId === item.id));
 
   function openStorage(intent = "manage") {
     setActionError("");
@@ -829,7 +915,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
 
   return (
     <>
-      <div style={{
+      <div data-item-id={item.id} style={{
         background: isLow ? "rgba(248,113,113,0.06)" : isAwaiting ? "rgba(250,204,21,0.06)" : isDoNotOrder ? "rgba(148,163,184,0.05)" : "rgba(255,255,255,0.03)",
         border: `1px solid ${isLow ? "rgba(248,113,113,0.2)" : isAwaiting ? "rgba(250,204,21,0.2)" : isDoNotOrder ? "rgba(148,163,184,0.18)" : "rgba(255,255,255,0.07)"}`,
         borderRadius: 12, padding: "12px 14px", contentVisibility: "auto", containIntrinsicSize: "150px",
@@ -842,9 +928,9 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
                 <div style={{ fontSize: 13, fontWeight: 600, color: "#fff", lineHeight: 1.3 }}>{item.name}</div>
                 {item.brand && <div style={{ fontSize: 10, color: "rgba(255,255,255,0.35)", fontFamily: "monospace", marginTop: 1 }}>{item.brand}</div>}
               </div>
-              <div aria-label={`${item.quantity} units in stock`} style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
+              <div aria-label={`${item.quantity} ${usesSupply ? (item.quantity === 1 ? "spare" : "spares") : "units in stock"}`} style={{ display: "flex", alignItems: "baseline", gap: 4, flexShrink: 0 }}>
                 <span style={{ fontSize: 18, fontWeight: 750, color: statusColor, fontFamily: "monospace", minWidth: 20, textAlign: "right" }}>{item.quantity}</span>
-                <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>units</span>
+                <span style={{ fontSize: 9, color: "rgba(255,255,255,0.3)", fontFamily: "monospace" }}>{usesSupply ? (item.quantity === 1 ? "spare" : "spares") : "units"}</span>
               </div>
             </div>
 
@@ -883,7 +969,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
               {allocationError ? (
                 <div style={{ fontSize: 11, marginTop: 4, color: "#fca5a5" }}>Storage unavailable · reload before editing</div>
               ) : stored.length === 0 ? (
-                <div style={{ fontSize: 11, marginTop: 4, color: "#facc15" }}>No container allocation · {item.location}</div>
+                <div style={{ fontSize: 11, marginTop: 4, color: "#facc15" }}>No container allocation · {catalogs ? `Preferred room: ${item.locationName || item.location}` : item.location}</div>
               ) : (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginTop: 5 }}>
                   {stored.map(row => (
@@ -896,9 +982,9 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
             </button>
 
             <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-              <button disabled={working || item.quantity <= 0} aria-label={`Use one ${item.name}`} onClick={decrement} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(129,140,248,0.14)", border: "1px solid rgba(129,140,248,0.32)", color: "#a5b4fc", borderRadius: 7, cursor: item.quantity <= 0 ? "not-allowed" : "pointer", opacity: working || item.quantity <= 0 ? 0.45 : 1, fontFamily: "monospace", fontWeight: 700 }}>
+              {!usesSupply && <button disabled={working || item.quantity <= 0} aria-label={`Use one ${item.name}`} onClick={decrement} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(129,140,248,0.14)", border: "1px solid rgba(129,140,248,0.32)", color: "#a5b4fc", borderRadius: 7, cursor: item.quantity <= 0 ? "not-allowed" : "pointer", opacity: working || item.quantity <= 0 ? 0.45 : 1, fontFamily: "monospace", fontWeight: 700 }}>
                 Use 1
-              </button>
+              </button>}
               <button disabled={working} aria-label={`Add one ${item.name}`} onClick={increment} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.72)", borderRadius: 7, cursor: "pointer", opacity: working ? 0.45 : 1, fontFamily: "monospace" }}>
                 +1
               </button>
@@ -929,9 +1015,19 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
                   Resume manual ordering
                 </button>
               )}
+              {INVENTORY_COPY && <button disabled={working} aria-label={`Copy ${item.name}`} onClick={() => {
+                setActionError("");
+                if (allocationError) { setActionError("Storage details are unavailable. Reload before copying."); return; }
+                try {
+                  const draft = inventoryCopyDraft(item, allocations, { canonical: CATALOGS_ENABLED });
+                  validateInventoryCopy(draft);
+                  onCopy(draft);
+                } catch (error) { setActionError(error.message); }
+              }} style={{ fontSize: 11, padding: "8px 12px", minHeight: 44, background: "rgba(129,140,248,0.12)", border: "1px solid rgba(129,140,248,0.3)", color: "#c7d2fe", borderRadius: 7, fontFamily: "monospace" }}>Copy</button>}
               <button onClick={() => setEditing(true)} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "rgba(255,255,255,0.5)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Edit</button>
               <button onClick={handleDelete} style={{ fontSize: 10, padding: "6px 10px", minHeight: 30, background: "transparent", border: "1px solid rgba(248,113,113,0.15)", color: "rgba(248,113,113,0.58)", borderRadius: 7, cursor: "pointer", fontFamily: "monospace" }}>Delete permanently</button>
             </div>
+            {SUPPLY_TRACKING && supplyData && <SupplyPanel item={item} data={supplyData} order={order} allocations={allocations} containers={containers} today={today} apiFetch={apiFetch} onRefresh={onSupplyRefresh} Modal={Modal} />}
             {actionError && (
               <div role="alert" style={{ marginTop: 8, color: "#fca5a5", fontSize: 10, fontFamily: "monospace" }}>
                 {actionError} {allocationError && <button onClick={onReload} style={{ marginLeft: 5, border: 0, background: "transparent", color: "#c7d2fe", fontFamily: "monospace", textDecoration: "underline" }}>Reload</button>}
@@ -954,7 +1050,7 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
 
       {editing && (
         <Modal title="Edit Item" onClose={() => setEditing(false)}>
-          <ItemForm initial={item} onSave={handleEdit} onClose={() => setEditing(false)} />
+          <ItemForm catalogs={catalogs} initial={item} onSave={handleEdit} onClose={() => setEditing(false)} />
         </Modal>
       )}
 
@@ -973,10 +1069,13 @@ function ItemCard({ item, today, order = null, allocations = [], allocationError
   );
 }
 
-export default function HomeOS() {
+export default function HomeOS({ catalogAdapter = null } = {}) {
   const today = useLocalToday();
   const [items, setItems] = useState([]);
+  const [supplyData, setSupplyData] = useState(null);
   const [locations, setLocations] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [catalogUnavailable, setCatalogUnavailable] = useState(false);
   const [containers, setContainers] = useState([]);
   const [orders, setOrders] = useState([]);
   const [allocationsByItem, setAllocationsByItem] = useState({});
@@ -989,16 +1088,42 @@ export default function HomeOS() {
   const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
   const [adding, setAdding] = useState(false);
+  const [copyDraft, setCopyDraft] = useState(null);
   const [tab, setTab] = useState("inventory");
+
+  const applyCatalogSnapshot = useCallback(snapshot => {
+    setCategories(snapshot.categories);
+    setLocations(snapshot.locations);
+    setItems(snapshot.items);
+    setContainers(snapshot.containers);
+    setOrders(snapshot.orders);
+    setStats(snapshot.stats);
+    setAllocationsByItem(snapshot.allocationsByItem);
+    setAllocationErrors({});
+    setFilterCat(current => current === "all" || snapshot.categories.some(row => row.id === current && isAssignable(row)) ? current : "all");
+    setFilterLoc(current => current === "all" || snapshot.locations.some(row => row.id === current && isAssignable(row)) ? current : "all");
+    setError(null);
+    setLoading(false);
+  }, []);
 
   const loadAll = useCallback(async ({ throwOnError = false } = {}) => {
     try {
-      const [data, statsData, locationData, containerData, orderData] = await Promise.all([
+      if (CATALOGS_ENABLED) {
+        const [snapshot, supplyResponse] = await Promise.all([
+          (catalogAdapter || getCatalogAdapter()).load(),
+          SUPPLY_TRACKING ? apiFetch("/supply") : Promise.resolve(null),
+        ]);
+        applyCatalogSnapshot(snapshot);
+        setSupplyData(supplyResponse);
+        return;
+      }
+      const [data, statsData, locationData, containerData, orderData, supplyResponse] = await Promise.all([
         apiFetch("/items"),
         apiFetch("/stats"),
         apiFetch("/locations"),
         apiFetch("/containers"),
         apiFetch("/orders?status=open").catch(nextError => nextError.status === 404 && !throwOnError && !DELIVERY_TRACKING ? [] : Promise.reject(nextError)),
+        SUPPLY_TRACKING ? apiFetch("/supply") : Promise.resolve(null),
       ]);
       const allocationResults = await Promise.allSettled(
         data.map(item => apiFetch(`/items/${item.id}/stock-allocations`)),
@@ -1009,6 +1134,7 @@ export default function HomeOS() {
         nextAllocations[item.id] = allocationResults[index].status === "fulfilled" ? allocationResults[index].value : [];
         if (allocationResults[index].status === "rejected") nextAllocationErrors[item.id] = true;
       });
+      setSupplyData(supplyResponse);
       setItems(data);
       setStats(statsData);
       setLocations(locationData);
@@ -1023,9 +1149,16 @@ export default function HomeOS() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyCatalogSnapshot, catalogAdapter]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => {
+    if (!SUPPLY_TRACKING) return undefined;
+    const refresh = () => { if (document.visibilityState !== "hidden") loadAll(); };
+    window.addEventListener("focus",refresh);
+    document.addEventListener("visibilitychange",refresh);
+    return () => { window.removeEventListener("focus",refresh);document.removeEventListener("visibilitychange",refresh); };
+  }, [loadAll]);
 
   async function reloadAll() {
     if (orderMutations.pending) return;
@@ -1061,11 +1194,25 @@ export default function HomeOS() {
 
   async function addItem(form) {
     const created = await apiFetch("/items", { method: "POST", body: JSON.stringify(form) });
-    const allocations = await apiFetch(`/items/${created.id}/stock-allocations`);
+    // Creation already committed. A refresh failure must never offer another create.
+    const allocationResult = await apiFetch(`/items/${created.id}/stock-allocations`).then(
+      allocations => ({ allocations, failed: false }),
+      () => ({ allocations: [], failed: true }),
+    );
+    const allocations = allocationResult.allocations;
     setItems(prev => [created, ...prev]);
     setAllocationsByItem(prev => ({ ...prev, [created.id]: allocations }));
-    setAllocationErrors(prev => ({ ...prev, [created.id]: false }));
+    setAllocationErrors(prev => ({ ...prev, [created.id]: allocationResult.failed }));
     setAdding(false);
+    apiFetch("/stats").then(setStats).catch(() => {});
+  }
+
+  function copiedItemCreated(created) {
+    const { allocations, ...item } = created;
+    setItems(previous => [item, ...previous.filter(existing => existing.id !== item.id)]);
+    setAllocationsByItem(previous => ({ ...previous, [item.id]: allocations }));
+    setAllocationErrors(previous => ({ ...previous, [item.id]: false }));
+    setCopyDraft(null);
     apiFetch("/stats").then(setStats).catch(() => {});
   }
 
@@ -1086,12 +1233,12 @@ export default function HomeOS() {
 
   const ordersByItem = openOrderMap(orders);
   const filtered = items.filter(i => {
-    if (filterCat !== "all" && i.category !== filterCat) return false;
+    if (filterCat !== "all" && (CATALOGS_ENABLED ? i.categoryId : i.category) !== filterCat) return false;
     const effectiveStatus = ordersByItem.has(i.id) ? "awaiting_shipment" : i.status;
     if (filterStatus !== "all" && effectiveStatus !== filterStatus) return false;
     if (filterLoc !== "all") {
       const itemRows = positiveAllocations(allocationRows(allocationsByItem[i.id] || [], containers));
-      if (!itemRows.some(row => row.locationName === filterLoc) && i.location !== filterLoc) return false;
+      if (CATALOGS_ENABLED ? (!itemRows.some(row => row.locationId === filterLoc) && i.locationId !== filterLoc) : (!itemRows.some(row => row.locationName === filterLoc) && i.location !== filterLoc)) return false;
     }
     if (!search) return true;
     const query = search.toLowerCase();
@@ -1121,12 +1268,15 @@ export default function HomeOS() {
 
   const tabs = [
     { key: "inventory", label: "Inventory" },
+    ...(CATALOG_MANAGEMENT_ENABLED ? [{ key: "settings", label: "Settings" }] : []),
     { key: "orders", label: `Orders${needToOrder.length + awaitingShipment.length > 0 ? ` (${needToOrder.length + awaitingShipment.length})` : ""}` },
   ];
 
   const locationNames = locations.filter(location => location.isActive).map(location => location.name);
   const itemCardProps = item => ({
+    supplyData, onSupplyRefresh: () => loadAll({ throwOnError: true }),
     item,
+    catalogs: CATALOGS_ENABLED ? { categories, locations } : null,
     today,
     order: ordersByItem.get(item.id) || null,
     allocations: allocationsByItem[item.id] || [],
@@ -1138,6 +1288,7 @@ export default function HomeOS() {
     onOrderChanged: () => loadAll({ throwOnError: true }),
     onOrderRefreshRequired: setError,
     onReload: loadAll,
+    onCopy: setCopyDraft,
   });
 
   // Clickable status pill handler — toggles filter
@@ -1149,6 +1300,10 @@ export default function HomeOS() {
     <div style={{ minHeight: "100vh", background: "#09090e", color: "#e2e8f0", fontFamily: "system-ui, sans-serif", overflowY: "auto" }}>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        .item-form-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .item-form-columns input { min-width: 0; }
+        .copy-storage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+        @media (max-width: 480px) { .item-form-columns { grid-template-columns: minmax(0, 1fr); } }
         .order-date-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
         .order-date-fields input { min-width: 0; }
         @media (max-width: 480px) { .order-date-fields { grid-template-columns: minmax(0, 1fr); } }
@@ -1219,7 +1374,7 @@ export default function HomeOS() {
               {stats ? `${stats.total_items} items · ${stats.total_units} units` : "Loading..."}
             </div>
           </div>
-          <button onClick={() => setAdding(true)} style={{
+          <button disabled={CATALOGS_ENABLED && (loading || !!error || catalogUnavailable || tab === "settings")} onClick={() => setAdding(true)} style={{
             background: "#818cf8", color: "#000", border: "none", borderRadius: 8,
             padding: "8px 16px", fontSize: 12, fontFamily: "monospace", fontWeight: 700,
           }}>+ Add Item</button>
@@ -1266,7 +1421,7 @@ export default function HomeOS() {
         {/* Tabs */}
         <div style={{ display: "flex" }}>
           {tabs.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)} style={{
+            <button key={t.key} disabled={catalogUnavailable && t.key !== "settings"} onClick={() => setTab(t.key)} style={{
               background: "none", border: "none", padding: "7px 12px", fontSize: 11,
               fontFamily: "monospace", color: tab === t.key ? "#fff" : "rgba(255,255,255,0.3)",
               borderBottom: tab === t.key ? "2px solid #818cf8" : "2px solid transparent",
@@ -1285,10 +1440,13 @@ export default function HomeOS() {
           <button disabled={loading} onClick={reloadAll} style={{ ...orderButtonStyle, width: "100%", marginTop: 8, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#fff" }}>{loading ? "Reloading…" : "Reload data"}</button>
         </div>}
 
+        {CATALOG_MANAGEMENT_ENABLED && tab === "settings" && <CatalogManager adapter={catalogAdapter || getCatalogAdapter()} onSnapshot={applyCatalogSnapshot} onAvailabilityChange={setCatalogUnavailable} />}
+
         {/* INVENTORY TAB */}
         {tab === "inventory" && (
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 14 }}>
+              {SUPPLY_TRACKING && supplyData && <SupplySettings settings={supplyData.settings} apiFetch={apiFetch} onRefresh={() => loadAll({ throwOnError: true })} />}
               <input aria-label="Search inventory" value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="Search items, brands, or containers..."
                 style={{ ...inputStyle, fontSize: 12 }} />
@@ -1297,14 +1455,14 @@ export default function HomeOS() {
                   ariaLabel="Filter by category"
                   value={filterCat}
                   onChange={setFilterCat}
-                  options={[{ value: "all", label: "All Categories" }, ...CATEGORIES.map(category => ({ value: category, label: category }))]}
+                  options={[{ value: "all", label: "All Categories" }, ...(CATALOGS_ENABLED ? categories.filter(isAssignable).map(category => ({ value: category.id, label: category.name })) : CATEGORIES.map(category => ({ value: category, label: category })))]}
                   style={{ flex: 1, fontSize: 11 }}
                 />
                 <AnchoredSelect
                   ariaLabel="Filter by location"
                   value={filterLoc}
                   onChange={setFilterLoc}
-                  options={[{ value: "all", label: "All Locations" }, ...locationNames.map(location => ({ value: location, label: location }))]}
+                  options={[{ value: "all", label: "All Locations" }, ...(CATALOGS_ENABLED ? locations.filter(isAssignable).map(location => ({ value: location.id, label: location.name })) : locationNames.map(location => ({ value: location, label: location })))]}
                   style={{ flex: 1, fontSize: 11 }}
                 />
                 <AnchoredSelect
@@ -1385,9 +1543,11 @@ export default function HomeOS() {
         )}
       </div>
 
+      {copyDraft && <CopyItemModal draft={copyDraft} catalogs={CATALOGS_ENABLED ? { categories, locations } : null} containers={containers} onCreated={copiedItemCreated} onClose={() => setCopyDraft(null)} />}
+
       {adding && (
         <Modal title="Add Item" onClose={() => setAdding(false)}>
-          <ItemForm onSave={addItem} onClose={() => setAdding(false)} />
+          <ItemForm catalogs={CATALOGS_ENABLED ? { categories, locations } : null} onSave={addItem} onClose={() => setAdding(false)} />
         </Modal>
       )}
     </div>

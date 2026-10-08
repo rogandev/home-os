@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "test": "node --test",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:supply-fixture": "vite build --config fixtures/vite.supply.config.js",
+    "dev:integration-fixture": "vite --config fixtures/integration/vite.config.js",
+    "build:integration-fixture": "vite build --config fixtures/integration/vite.config.js"
   },
   "dependencies": {
     "react": "^18.3.1",

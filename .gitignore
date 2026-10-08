@@ -2,3 +2,7 @@ node_modules
 dist
 .DS_Store
 .env
+fixture-dist
+
+dist-supply
+dist-integration
