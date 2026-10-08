@@ -1325,6 +1325,8 @@ export default function HomeOS({ catalogAdapter = null } = {}) {
           overscroll-behavior: contain;
         }
         .modal-panel {
+          color: #e2e8f0;
+          font-family: system-ui, sans-serif;
           width: 100%;
           max-width: 600px;
           max-height: calc(100dvh - 32px);
