@@ -4,7 +4,11 @@ import "./razors.css";
 const localToday = () => { const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 export default function RazorPanel({ request, manage=false, onChanged }) {
   const [data,setData]=useState(null),[error,setError]=useState(""),[busy,setBusy]=useState(false),[edit,setEdit]=useState(null),[action,setAction]=useState(null),[pending,setPending]=useState(null);
-  const lock=useRef(false),generation=useRef(0);
+  const lock=useRef(false),generation=useRef(0),formRef=useRef(null);
+  const activeFormId=action ? `${action.razor.id}:${action.entry?.id ?? "change"}` : edit?.id ?? null;
+  useEffect(()=>{
+    if(activeFormId){formRef.current?.focus({preventScroll:true});formRef.current?.scrollIntoView?.({block:"start"});}
+  },[activeFormId]);
   const invalidate=useCallback(()=>{generation.current+=1;},[]);
   const refresh=useCallback(async()=>{
     const n=++generation.current;
@@ -46,7 +50,7 @@ export default function RazorPanel({ request, manage=false, onChanged }) {
   }
   return <section className="razor-panel" aria-label="Razor blades">
     <div className="razor-heading"><h3>Razor blades</h3><button type="button" disabled={busy} onClick={reload}>Reload</button></div>
-    {error && <p role="alert">{error}</p>}
+    {error && !action && !edit && <p role="alert">{error}</p>}
     {!data && !error && <p>Loading blade status…</p>}
     {data && <>
       {!data.razors.length && <p>No razors configured. {manage?"Add each razor and choose its matching replacement inventory. No past changes will be assumed.":"Configure your razors in Home OS first."}</p>}
@@ -69,8 +73,9 @@ export default function RazorPanel({ request, manage=false, onChanged }) {
         </details>
       </article>)}
       {manage && !edit && <button type="button" disabled={busy||!!pending||!!action} onClick={()=>configure()}>Add razor</button>}
-      {edit && <form onSubmit={save} aria-label="Configure razor">
+      {edit && <form ref={formRef} tabIndex={-1} onSubmit={save} aria-label="Configure razor">
         <h4>{edit.version?"Configure razor":"Add razor"}</h4>
+        {error && <p role="alert">{error}</p>}
         <label>Razor name<input required maxLength="120" value={edit.name} onChange={e=>field("name",e.target.value)} /></label>
         <label>Matching replacement inventory<select required value={edit.itemId} onChange={e=>field("itemId",e.target.value)}><option value="">Choose inventory item</option>{data.items.map(i=><option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
         <label>Replacement interval (days, optional)<input type="number" min="1" max="3650" value={edit.intervalDays} onChange={e=>field("intervalDays",e.target.value)} /></label>
@@ -78,8 +83,9 @@ export default function RazorPanel({ request, manage=false, onChanged }) {
         <p>Reminders appear in the app only. Stock must count individual replacement blades, not packs. Changing the inventory mapping affects future replacements only.</p>
         <button disabled={busy}>Save razor</button><button type="button" disabled={busy} onClick={()=>setEdit(null)}>Cancel</button>
       </form>}
-      {action && <form onSubmit={submit} aria-label={action.entry?"Correct blade date":"Record blade replacement"}>
+      {action && <form ref={formRef} tabIndex={-1} onSubmit={submit} aria-label={action.entry?"Correct blade date":"Record blade replacement"}>
         <h4>{action.entry?"Correct date":"Change Blade"} · {action.razor.name}</h4>
+        {error && <p role="alert">{error}</p>}
         <fieldset disabled={busy||!!pending}>
           <label>Actual replacement date<input required type="date" max={localToday()} value={action.changedOn} onChange={e=>setAction({...action,changedOn:e.target.value})} /></label>
           {action.entry?<><label>Correction reason<input required maxLength="1000" value={action.reason} onChange={e=>setAction({...action,reason:e.target.value})} /></label><p>Corrects this date with an audit record. Inventory is unchanged.</p></>:<>
