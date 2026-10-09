@@ -1,0 +1,26 @@
+.catalog { color:#e2e8f0; background:#101018; font:15px/1.5 system-ui,sans-serif; max-width:720px; margin:auto; padding:28px; border:1px solid #282837; border-radius:18px; }
+.catalog * { box-sizing:border-box; }
+.catalog h1 { font-size:28px; line-height:1.2; margin:8px 0; color:#fff; }
+.catalog h2 { margin:0 0 20px; font-size:22px; }
+.catalog p { color:#b0b2c4; margin:12px 0; }
+.catalog .catalog-eyebrow { color:#a5b4fc; font:11px monospace; letter-spacing:.14em; }
+.catalog button,.catalog input,.catalog select { font:inherit; border:1px solid #444456; border-radius:9px; padding:10px 14px; color:#f1f5f9; background:#20202d; min-height:44px; }
+.catalog button { cursor:pointer; }
+.catalog button:disabled { opacity:.45; cursor:not-allowed; }
+.catalog :focus-visible { outline:2px solid #c7d2fe; outline-offset:3px; }
+.catalog .catalog-primary { background:#a5b4fc; border-color:#a5b4fc; color:#111126; font-weight:650; }
+.catalog-tabs { display:flex; gap:8px; margin:24px 0 12px; }
+.catalog-tabs button[aria-pressed=true] { border-color:#a5b4fc; color:#c7d2fe; }
+.catalog-toolbar,.catalog-list li,.catalog-actions,.catalog-dialog-actions { display:flex; gap:10px; align-items:center; justify-content:space-between; }
+.catalog-list { padding:0; list-style:none; margin:8px 0 0; }
+.catalog-list li { padding:16px 0; border-top:1px solid #2b2b3c; }
+.catalog-value { min-width:0; overflow-wrap:anywhere; }
+.catalog-value span { display:block; color:#9396ad; font-size:12px; margin-top:3px; }
+.catalog-actions { flex-shrink:0; }
+.catalog dialog { margin:auto; color:#e2e8f0; background:#171722; border:1px solid #454558; border-radius:16px; width:min(480px,calc(100vw - 24px)); max-height:calc(100dvh - 24px); padding:24px; overflow:auto; }
+.catalog dialog::backdrop { background:#000b; }
+.catalog label { display:block; font-weight:600; }
+.catalog input,.catalog select { display:block; width:100%; margin:8px 0 18px; }
+.catalog-dialog-actions { justify-content:flex-end; margin-top:24px; }
+.catalog .catalog-error { background:#3d212b; border:1px solid #975264; padding:12px; border-radius:8px; color:#fecdd3; }
+@media(max-width:480px) { .catalog { padding:18px; border-radius:12px; } .catalog h1 { font-size:25px; } .catalog-list li { flex-wrap:wrap; } .catalog-value { width:100%; } .catalog-actions { justify-content:flex-end; width:100%; } }

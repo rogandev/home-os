@@ -9,6 +9,7 @@ export function editableItemValues(initial = {}) {
   return {
     name: initial.name ?? "",
     brand: initial.brand ?? "",
+    description: initial.description ?? "",
     category: initial.category ?? "Skin Care",
     location: initial.location ?? "Walk-in Closet",
     size: initial.size ?? "",
