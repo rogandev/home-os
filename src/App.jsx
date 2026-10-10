@@ -1,3 +1,4 @@
+import RazorPanel from "./RazorPanel.jsx";
 import CatalogManager from "./CatalogManager.jsx";
 import { createCatalogAdapter, createIndexedDBCatalogJournal } from "./catalog-adapter.js";
 import { canonicalItemPayload, catalogOptions, isAssignable } from "./catalog.js";
@@ -1443,6 +1444,8 @@ export default function HomeOS({ catalogAdapter = null } = {}) {
         </div>}
 
         {CATALOG_MANAGEMENT_ENABLED && tab === "settings" && <CatalogManager adapter={catalogAdapter || getCatalogAdapter()} onSnapshot={applyCatalogSnapshot} onAvailabilityChange={setCatalogUnavailable} />}
+
+        {import.meta.env.VITE_RAZOR_TRACKING === "true" && tab === "inventory" && <RazorPanel request={apiFetch} manage onChanged={() => loadAll({ throwOnError: true })} />}
 
         {/* INVENTORY TAB */}
         {tab === "inventory" && (
