@@ -1443,7 +1443,7 @@ export default function HomeOS({ catalogAdapter = null } = {}) {
           <button disabled={loading} onClick={reloadAll} style={{ ...orderButtonStyle, width: "100%", marginTop: 8, border: "1px solid rgba(255,255,255,0.2)", background: "transparent", color: "#fff" }}>{loading ? "Reloading…" : "Reload data"}</button>
         </div>}
 
-        {CATALOG_MANAGEMENT_ENABLED && tab === "settings" && <CatalogManager adapter={catalogAdapter || getCatalogAdapter()} onSnapshot={applyCatalogSnapshot} onAvailabilityChange={setCatalogUnavailable} />}
+        {CATALOG_MANAGEMENT_ENABLED && tab === "settings" && <CatalogManager request={apiFetch} adapter={catalogAdapter || getCatalogAdapter()} onSnapshot={applyCatalogSnapshot} onAvailabilityChange={setCatalogUnavailable} />}
 
         {import.meta.env.VITE_RAZOR_TRACKING === "true" && tab === "inventory" && <RazorPanel request={apiFetch} manage onChanged={() => loadAll({ throwOnError: true })} />}
 
