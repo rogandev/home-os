@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { needsCatalogReload, validateCatalogName, validateReplacement, isAssignable, catalogConflictMessage } from "./catalog.js";
 import "./catalog.css";
+import ContainerCreator from "./ContainerCreator.jsx";
 
 // adapter.load() -> { categories, locations }; adapter.mutate(command) -> void.
 // Uses the PR78 adapter only in isolated fixtures until approved rollout.
-export default function CatalogManager({ adapter, onSnapshot = () => {}, onAvailabilityChange }) {
+export default function CatalogManager({ adapter, request, onSnapshot = () => {}, onAvailabilityChange }) {
+  const [containerOpen, setContainerOpen] = useState(false);
   const [snapshot, setSnapshot] = useState(null);
   const [kind, setKind] = useState("categories");
   const [editor, setEditor] = useState(null);
@@ -43,7 +45,7 @@ export default function CatalogManager({ adapter, onSnapshot = () => {}, onAvail
   }
 
   useEffect(() => { reload(); }, [adapter]);
-  useEffect(() => { onAvailabilityChange?.(busy || blocked); }, [busy, blocked, onAvailabilityChange]);
+  useEffect(() => { onAvailabilityChange?.(busy || blocked || containerOpen); }, [busy, blocked, containerOpen, onAvailabilityChange]);
   useEffect(() => {
     if (!editor) return;
     const previous = document.activeElement;
@@ -107,13 +109,14 @@ export default function CatalogManager({ adapter, onSnapshot = () => {}, onAvail
     {!editor && error && <p role="alert" className="catalog-error">{error}</p>}
     {notice && <p role="status">{notice}</p>}
     {blocked && <button onClick={reload} disabled={busy}>{busy ? "Loading…" : adapter.pending ? "Resolve pending change" : "Reload values"}</button>}
-    <div className="catalog-toolbar"><p>{records.length} {records.length === 1 ? singular : kind}</p><button className="catalog-primary" disabled={!snapshot || busy || blocked} onClick={() => open("add")}>Add {singular}</button></div>
+    <div className="catalog-toolbar"><p>{records.length} {records.length === 1 ? singular : kind}</p><button className="catalog-primary" disabled={!snapshot || busy || blocked || containerOpen} onClick={() => open("add")}>Add {singular}</button></div>
     {!snapshot && !blocked && <p role="status">Loading values…</p>}
     {snapshot && !records.length && <p>No {kind} yet. Add your first {singular} to get started.</p>}
     <ul className="catalog-list">{records.map(record => <li key={record.id}>
       <div className="catalog-value"><strong>{record.name}</strong><span>{record.usageCount} {record.usageCount === 1 ? "assignment" : "assignments"} · {record.itemCount} items · {record.containerCount} containers{record.isProtected ? " · Protected legacy location" : ""}</span></div>
-      <div className="catalog-actions"><button disabled={busy || blocked} aria-label={`Rename ${record.name}`} onClick={() => open("rename", record)}>Rename</button>{!record.isProtected && <button disabled={busy || blocked} aria-label={`Delete ${record.name}`} onClick={() => open("delete", record)}>Delete</button>}</div>
+      <div className="catalog-actions"><button disabled={busy || blocked || containerOpen} aria-label={`Rename ${record.name}`} onClick={() => open("rename", record)}>Rename</button>{!record.isProtected && <button disabled={busy || blocked || containerOpen} aria-label={`Delete ${record.name}`} onClick={() => open("delete", record)}>Delete</button>}</div>
     </li>)}</ul>
+    {request && <ContainerCreator request={request} locations={snapshot?.locations || []} disabled={!snapshot || busy || blocked || !!editor} onCreated={refresh} onOpenChange={setContainerOpen} />}
     {editor && <dialog ref={dialog} aria-labelledby="catalog-dialog-title" onCancel={event => { event.preventDefault(); close(); }}>
       <form onSubmit={save}>
         <h2 id="catalog-dialog-title">{editor.mode === "add" ? "Add" : editor.mode === "rename" ? "Rename" : "Delete"} {singular}</h2>
