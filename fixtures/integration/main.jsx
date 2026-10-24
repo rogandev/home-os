@@ -9,8 +9,8 @@ window.__homeIntegrationFixture = fixture;
 window.fetch = async (url, options = {}) => {
   try {
     const parsed = new URL(url, window.location.origin);
-    if (parsed.origin !== "http://127.0.0.1:5196" || !parsed.pathname.startsWith("/home-os/")) throw new Error("Fixture only accepts its synthetic Home OS API.");
-    const value = await fixture.request(parsed.pathname.replace(/^\/home-os/, "") + parsed.search, options);
+    if (parsed.origin !== "http://127.0.0.1:5196" || !parsed.pathname.startsWith("/api/data/home-os/")) throw new Error("Fixture only accepts its synthetic Home OS API.");
+    const value = await fixture.request(parsed.pathname.replace(/^(?:\/api\/data)?\/home-os/, "") + parsed.search, options);
     return new Response(JSON.stringify(value), { status: 200, headers: { "Content-Type": "application/json" } });
   } catch (error) { return new Response(JSON.stringify({ error: error.message, code: error.code }), { status: error.status || 500 }); }
 };

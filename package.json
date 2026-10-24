@@ -10,15 +10,20 @@
     "preview": "vite preview",
     "build:supply-fixture": "vite build --config fixtures/vite.supply.config.js",
     "dev:integration-fixture": "vite --config fixtures/integration/vite.config.js",
-    "build:integration-fixture": "vite build --config fixtures/integration/vite.config.js"
+    "build:integration-fixture": "vite build --config fixtures/integration/vite.config.js",
+    "test:auth": "node --test tests/auth/*.test.mjs"
   },
   "dependencies": {
+    "express": "4.22.3",
+    "express-openid-connect": "3.4.0",
+    "jose": "6.2.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "jsdom": "^26.1.0",
+    "nock": "14.0.17",
     "vite": "^5.4.2"
   }
 }
