@@ -17,7 +17,7 @@ export default function SessionGate({children}) {
   return <main style={{maxWidth:480,margin:'15vh auto',padding:24,fontFamily:'system-ui'}}>
     <h1>{status==='checking'?'Checking sign-in…':'Sign in to continue'}</h1>
     {status==='signed-out' && <><p>Your data is available after you sign in.</p><a href="/api/auth/login">Sign in</a></>}
-    {status==='denied' && <><p>This account does not have access.</p><a href="/api/auth/login">Try another account</a></>}
+    {status==='denied' && <><p>This account does not have access.</p><a href="/api/auth/login">Try another account</a><form method="post" action="/api/auth/logout"><button type="submit">Sign out</button></form></>}
     {status==='unavailable' && <><p>Sign-in is temporarily unavailable. Your data has not been changed.</p><button onClick={()=>window.location.reload()}>Retry</button></>}
   </main>;
 }

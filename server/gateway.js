@@ -64,19 +64,20 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
       return session;
     },
   }));
-  app.get('/api/auth/login', (_req,res) => res.oidc.login({returnTo:'/'}));
+  app.get('/api/auth/login', (_req,res) => res.oidc.login({returnTo:'/',authorizationParams:{prompt:'login'}}));
+  const sameOrigin = req => req.get('origin') === origin &&
+    (!req.get('sec-fetch-site') || req.get('sec-fetch-site') === 'same-origin');
+  // Every account may clear its own local session; only the owner may access data.
+  app.post('/api/auth/logout', (req,res) => {
+    if (!sameOrigin(req)) return res.status(403).json({error:'Request origin denied.'});
+    return res.oidc.logout({returnTo:'/'});
+  });
   const signedIn = req => req.oidc?.isAuthenticated() && req.oidc.user?.sub === config.subject;
   app.use((req,res,next)=> {
     if (!signedIn(req)) return res.status(req.oidc?.isAuthenticated() ? 403 : 401).json({error:'Sign in with the approved account.'});
     next();
   });
   app.get('/api/auth/session', (_req,res)=>res.json({authenticated:true}));
-  const sameOrigin = req => req.get('origin') === origin &&
-    (!req.get('sec-fetch-site') || req.get('sec-fetch-site') === 'same-origin');
-  app.post('/api/auth/logout', (req,res) => {
-    if (!sameOrigin(req)) return res.status(403).json({error:'Request origin denied.'});
-    return res.oidc.logout({returnTo:'/'});
-  });
   app.use((req,res,next)=> {
     req.upstream = resolveRoute(req.originalUrl,req.method,routes);
     if (!req.upstream) return res.status(404).json({error:'Route not available.'});
