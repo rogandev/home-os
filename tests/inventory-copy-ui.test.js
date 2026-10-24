@@ -26,7 +26,7 @@ async function fixture({ enabled = true, canonical = false, supply = false, deli
   const gate = new Promise(resolve => { release = resolve; });
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options = {}) => {
-    const path = new URL(url).pathname.replace(/^\/home-os/, "");
+    const path = new URL(url, "https://fixture.invalid").pathname.replace(/^(?:\/api\/data)?\/home-os/, "");
     const method = options.method || "GET";
     const response = (value, status = 200) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
     if (method !== "GET") {

@@ -27,8 +27,8 @@ async function fixture({ app = false, enabled = true, management = true } = {}) 
   // App item writes use its existing JSON transport; catalog requests use the
   // injected adapter. Both are isolated; no network request can escape the test.
   globalThis.fetch = async (url, options = {}) => {
-    const parsed = new URL(url);
-    const path = parsed.pathname.replace(/^\/home-os/, "") + parsed.search;
+    const parsed = new URL(url, "https://fixture.invalid");
+    const path = parsed.pathname.replace(/^(?:\/api\/data)?\/home-os/, "") + parsed.search;
     const data = await itemTransport.request(path, options);
     return new Response(JSON.stringify(data), { status: 200 });
   };
