@@ -1,4 +1,5 @@
 import express from 'express';
+import { createHash } from 'node:crypto';
 import { auth } from 'express-openid-connect';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 
@@ -52,10 +53,10 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
     authorizationParams:{response_type:'code',response_mode:'query',scope:'openid'},
     idTokenSigningAlg:'RS256',
     routes:{login:false,logout:false,callback:'/api/auth/callback'},
-    session:{name:'__Host-rogan-session',rolling:false,absoluteDuration:3600,
+    session:{name:'__Host-rogan-session',rolling:true,rollingDuration:3600,absoluteDuration:28800,
       cookie:{httpOnly:true,secure:true,sameSite:'Lax',path:'/'}},
     // Fixed return path: never forward caller-controlled returnTo or authorization params.
-    getLoginState:()=>({returnTo:'/'}),
+    getLoginState:()=>({returnTo:'/api/auth/complete'}),
     afterCallback:async (_req,_res,session)=> {
       // Code-flow SDK checks state/nonce; additionally verify the signed ID token.
       await jwtVerify(session.id_token, keys, {
@@ -64,7 +65,15 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
       return session;
     },
   }));
-  app.get('/api/auth/login', (_req,res) => res.oidc.login({returnTo:'/',authorizationParams:{prompt:'login'}}));
+  app.get('/api/auth/login', (_req,res) => res.oidc.login({returnTo:'/api/auth/complete'}));
+  app.get('/api/auth/switch', (_req,res) => res.oidc.login({returnTo:'/api/auth/complete',authorizationParams:{prompt:'login'}}));
+  // No tokens, identity or caller-selected return URL enter this completion page.
+  // The original tab must verify the session with the server before unlocking.
+  const completionScript = `try { const c = new BroadcastChannel('rogan-sign-in'); c.postMessage('complete'); c.close(); } catch {} window.close();`;
+  const completionHash = createHash('sha256').update(completionScript).digest('base64');
+  app.get('/api/auth/complete', (_req,res) => res
+    .set('Content-Security-Policy', `default-src 'none'; script-src 'sha256-${completionHash}'; frame-ancestors 'none'; base-uri 'none'`)
+    .type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Return to your app</title><p>Return to your original app tab and select Check sign-in. You can close this window.</p><script>${completionScript}</script></html>`));
   const sameOrigin = req => req.get('origin') === origin &&
     (!req.get('sec-fetch-site') || req.get('sec-fetch-site') === 'same-origin');
   // Every account may clear its own local session; only the owner may access data.
@@ -77,7 +86,7 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
     if (!signedIn(req)) return res.status(req.oidc?.isAuthenticated() ? 403 : 401).json({error:'Sign in with the approved account.'});
     next();
   });
-  app.get('/api/auth/session', (_req,res)=>res.json({authenticated:true}));
+  app.get('/api/auth/session', (_req,res)=>res.json({authenticated:true,draftScope:createHash('sha256').update(JSON.stringify([config.issuer,config.clientID,config.subject])).digest('hex')}));
   app.use((req,res,next)=> {
     req.upstream = resolveRoute(req.originalUrl,req.method,routes);
     if (!req.upstream) return res.status(404).json({error:'Route not available.'});

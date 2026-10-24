@@ -23,7 +23,8 @@ test('actual OIDC code flow validates claims and enforces owner after session cr
   const login=await fetch(base+'/api/auth/login',{redirect:'manual',headers:{'X-Forwarded-Proto':'https'}});
   assert.equal(login.status,302);
   const authorization=new URL(login.headers.get('location'));
-  assert.equal(authorization.searchParams.get('prompt'),'login');
+  assert.equal(authorization.searchParams.get('prompt'),null);
+  assert.equal(authorization.searchParams.get('scope'),'openid');
   assert.equal(authorization.searchParams.get('code_challenge_method'),'S256');
   assert.ok(authorization.searchParams.get('code_challenge'));
   const now=Math.floor(Date.now()/1000);
@@ -48,9 +49,33 @@ test('actual OIDC code flow validates claims and enforces owner after session cr
   assert.ok(tokenMock.isDone());
   if(!['owner','wrong-owner'].includes(scenario)){assert.equal(callback.status,400);assert.equal(calls,0);return;}
   assert.equal(callback.status,302);
+  assert.equal(callback.headers.get('location'),'/api/auth/complete');
   assert.ok(callback.headers.getSetCookie().some(s=>s.startsWith('__Host-rogan-session=')&&s.includes('HttpOnly')&&s.includes('Secure')));
   const response=await fetch(base+'/api/data/boards',{headers:{Cookie:cookies(callback),'X-Forwarded-Proto':'https'}});
   assert.equal(response.status,scenario==='owner'?200:403);assert.equal(calls,scenario==='owner'?1:0);
+  if(scenario==='owner') {
+   const start=Date.now();
+   let renewed=cookies(callback);
+   // Each authenticated request rolls inactivity, but never the original eight-hour ceiling.
+   for(const seconds of [3599,7198,10797,14396,17995,21594,25193,28792]) {
+    t.mock.timers.enable({apis:['Date'],now:start+seconds*1000});
+    try {
+     const live=await fetch(base+'/api/auth/session',{headers:{Cookie:renewed,'X-Forwarded-Proto':'https'}});
+     assert.equal(live.status,200,`rolling at ${seconds}`);
+     assert.match((await live.json()).draftScope,/^[a-f0-9]{64}$/);
+     renewed=cookies(live);
+    } finally {t.mock.timers.reset();}
+   }
+   t.mock.timers.enable({apis:['Date'],now:start+28801*1000});
+   try {assert.equal((await fetch(base+'/api/auth/session',{headers:{Cookie:renewed,'X-Forwarded-Proto':'https'}})).status,401);}
+   finally {t.mock.timers.reset();}
+   const switchLogin=await fetch(base+'/api/auth/switch',{redirect:'manual',headers:{'X-Forwarded-Proto':'https'}});
+   assert.equal(new URL(switchLogin.headers.get('location')).searchParams.get('prompt'),'login');
+   const completion=await fetch(base+'/api/auth/complete');
+   assert.equal(completion.status,200);
+   assert.match(completion.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+   assert.ok(!(await completion.text()).includes('fixture-token'));
+  }
   if(['owner','wrong-owner'].includes(scenario)) {
    const cookie=cookies(callback);
    const deniedLogout=await fetch(base+'/api/auth/logout',{method:'POST',redirect:'manual',headers:{Cookie:cookie,Origin:'https://other.example.test','X-Forwarded-Proto':'https'}});
