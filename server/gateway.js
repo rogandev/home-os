@@ -6,6 +6,26 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 const UPSTREAM = 'https://flowboard-api-production-321b.up.railway.app';
 const PREFIX = '/api/data';
 const MAX_BODY = 20 * 1024 * 1024;
+const MAX_RESPONSE = 64 * 1024 * 1024;
+
+async function readBoundedJson(response) {
+  if (Number(response.headers.get("content-length")) > MAX_RESPONSE) {
+    await response.body?.cancel(); throw Error("Response too large");
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw Error("Missing response body");
+  const chunks = []; let size = 0;
+  try {
+    while (true) {
+      const {done,value} = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_RESPONSE) { await reader.cancel(); throw Error("Response too large"); }
+      chunks.push(Buffer.from(value));
+    }
+    return JSON.parse(Buffer.concat(chunks,size).toString("utf8"));
+  } finally { reader.releaseLock(); }
+}
 
 // No request header or query parameter can select an upstream or grant.
 export function resolveRoute(rawUrl, method, routes) {
@@ -51,7 +71,7 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
     issuerBaseURL:config.issuer, baseURL:origin, clientID:config.clientID, clientSecret:config.clientSecret,
     secret:config.secret, authRequired:false, idpLogout:false, enableTelemetry:false,
     authorizationParams:{response_type:'code',response_mode:'query',scope:'openid'},
-    idTokenSigningAlg:'RS256',
+    idTokenSigningAlg:'RS256', clientAuthMethod:'client_secret_post',
     routes:{login:false,logout:false,callback:'/api/auth/callback'},
     session:{name:'__Host-rogan-session',rolling:true,rollingDuration:3600,absoluteDuration:28800,
       cookie:{httpOnly:true,secure:true,sameSite:'Lax',path:'/'}},
@@ -109,7 +129,7 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
       // No retry, including on writes whose completion is uncertain.
       if (response.status === 204) return res.status(204).end();
       if (!(response.headers.get('content-type') || '').includes('application/json')) throw Error('Unexpected response');
-      const data = await response.json();
+      const data = await readBoundedJson(response);
       // Keep structured business errors (409/import outcomes) without forwarding upstream cookies/headers.
       if (response.status === 401 || response.status === 403 || response.status >= 500 && !data?.outcomes)
         return res.status(502).json({error:'The data service is unavailable. Refresh and review before retrying a write.'});
@@ -118,6 +138,6 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
       return res.status(502).json({error:'The data service is unavailable. Refresh and review before retrying a write.'});
     }
   });
-  app.use((_error,_req,res,_next)=>res.status(400).json({error:'Request could not be completed.'}));
+  app.use((error,_req,res,_next)=>res.status(error.type === 'entity.too.large' ? 413 : 400).json({error:'Request could not be completed.'}));
   return app;
 }

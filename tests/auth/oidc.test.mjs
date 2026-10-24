@@ -12,7 +12,7 @@ const encode=v=>Buffer.from(JSON.stringify(v)).toString('base64url');
 const cookies=response=>response.headers.getSetCookie().map(s=>s.split(';')[0]).join('; ');
 
 test('actual OIDC code flow validates claims and enforces owner after session creation',async t=>{
- nock(issuer).persist().get('/.well-known/openid-configuration').reply(200,{issuer:issuer+'/',authorization_endpoint:issuer+'/authorize',token_endpoint:issuer+'/token',jwks_uri:issuer+'/jwks',response_types_supported:['code'],subject_types_supported:['public'],id_token_signing_alg_values_supported:['RS256'],token_endpoint_auth_methods_supported:['client_secret_basic']});
+ nock(issuer).persist().get('/.well-known/openid-configuration').reply(200,{issuer:issuer+'/',authorization_endpoint:issuer+'/authorize',token_endpoint:issuer+'/token',jwks_uri:issuer+'/jwks',response_types_supported:['code'],subject_types_supported:['public'],id_token_signing_alg_values_supported:['RS256'],token_endpoint_auth_methods_supported:['client_secret_post']});
  nock(issuer).persist().get('/.well-known/jwks.json').reply(200,{keys:[jwk]});
  t.after(()=>nock.cleanAll());
  for(const scenario of ['owner','wrong-owner','wrong-audience','expired','wrong-nonce','wrong-signature','wrong-state','missing-transaction-cookie']) await t.test(scenario,async t=>{
@@ -36,6 +36,8 @@ test('actual OIDC code flow validates claims and enforces owner after session cr
    tokenCalls++;
    const form=new URLSearchParams(typeof body==='string'?body:body);
    assert.equal(form.get('grant_type'),'authorization_code');
+   assert.equal(form.get('client_id'),'fixture-client');
+   assert.equal(form.get('client_secret'),'fixture-secret');
    assert.equal(form.get('redirect_uri'),origin+'/api/auth/callback');
    assert.ok(form.get('code_verifier'));
    assert.equal(createHash('sha256').update(form.get('code_verifier')).digest('base64url'),authorization.searchParams.get('code_challenge'));
