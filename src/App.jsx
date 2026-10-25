@@ -1,3 +1,5 @@
+import {AccountControls} from './SessionGate.jsx';
+import {mapSettledReads} from './readPool.js';
 import { sessionFetch } from "./sessionFetch.js";
 import RazorPanel from "./RazorPanel.jsx";
 import CatalogManager from "./CatalogManager.jsx";
@@ -1129,9 +1131,7 @@ export default function HomeOS({ catalogAdapter = null } = {}) {
         apiFetch("/orders?status=open").catch(nextError => nextError.status === 404 && !throwOnError && !DELIVERY_TRACKING ? [] : Promise.reject(nextError)),
         SUPPLY_TRACKING ? apiFetch("/supply") : Promise.resolve(null),
       ]);
-      const allocationResults = await Promise.allSettled(
-        data.map(item => apiFetch(`/items/${item.id}/stock-allocations`)),
-      );
+      const allocationResults = await mapSettledReads(data, item => apiFetch(`/items/${item.id}/stock-allocations`));
       const nextAllocations = {};
       const nextAllocationErrors = {};
       data.forEach((item, index) => {
@@ -1380,10 +1380,10 @@ export default function HomeOS({ catalogAdapter = null } = {}) {
               {stats ? `${stats.total_items} items · ${stats.total_units} units` : "Loading..."}
             </div>
           </div>
-          <button disabled={CATALOGS_ENABLED && (loading || !!error || catalogUnavailable || tab === "settings")} onClick={() => setAdding(true)} style={{
+          <div style={{display:"flex",gap:8,alignItems:"center"}}><AccountControls/><button disabled={CATALOGS_ENABLED && (loading || !!error || catalogUnavailable || tab === "settings")} onClick={() => setAdding(true)} style={{
             background: "#818cf8", color: "#000", border: "none", borderRadius: 8,
             padding: "8px 16px", fontSize: 12, fontFamily: "monospace", fontWeight: 700,
-          }}>+ Add Item</button>
+          }}>+ Add Item</button></div>
         </div>
 
         {/* Clickable status pills — clicking filters the list */}

@@ -1,5 +1,20 @@
-import {useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
+import {createContext,useContext,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {blockSessionRequests} from './sessionFetch.js';
+
+
+const AccountContext=createContext(null);
+export function AccountControls(){
+  const clearForExit=useContext(AccountContext);
+  if(!clearForExit)return null;
+  const item={display:'block',padding:'10px 12px',color:'inherit',textDecoration:'none',font:'inherit',background:'none',border:0,textAlign:'left',width:'100%',cursor:'pointer'};
+  return <details style={{position:'relative',flexShrink:0,font:'12px system-ui',color:'var(--fb-text, #e2e8f0)'}}>
+    <summary style={{cursor:'pointer',listStyle:'none',border:'1px solid rgba(129,140,248,.35)',background:'rgba(129,140,248,.12)',borderRadius:7,padding:'8px 10px'}}>Account</summary>
+    <div style={{position:'absolute',right:0,top:'calc(100% + 6px)',minWidth:160,zIndex:50,border:'1px solid rgba(129,140,248,.35)',borderRadius:9,background:'var(--fb-surface, #171722)',boxShadow:'0 8px 24px #0004'}}>
+      <a style={item} href="/api/auth/switch" target="_blank" rel="noopener noreferrer" onClick={clearForExit}>Switch account</a>
+      <form method="post" action="/api/auth/logout" onSubmit={clearForExit} style={{margin:0}}><button style={item} type="submit">Sign out</button></form>
+    </div>
+  </details>;
+}
 
 const RETENTION_MS = 60 * 60 * 1000;
 export default function SessionGate({children}) {
@@ -40,7 +55,9 @@ export default function SessionGate({children}) {
     if(channel)channel.onmessage=e=>{if(e.data==='complete')recheck();};
     window.addEventListener('rogan-session-ended',expired);
     window.addEventListener('focus',recheck);
-    return ()=>{alive.current=false;++request.current;channel?.close();window.removeEventListener('rogan-session-ended',expired);window.removeEventListener('focus',recheck);};
+    const visible=()=>{if(document.visibilityState==='visible')recheck();};
+    document.addEventListener('visibilitychange',visible);
+    return ()=>{alive.current=false;++request.current;channel?.close();window.removeEventListener('rogan-session-ended',expired);window.removeEventListener('focus',recheck);document.removeEventListener('visibilitychange',visible);};
   },[check]);
   useLayoutEffect(()=>{
     if(status!=='ready') {
@@ -73,10 +90,7 @@ export default function SessionGate({children}) {
     return true;
   }
   return <>
-    {status==='ready'?<div style={{textAlign:'right',padding:8}}>
-      <a href="/api/auth/switch" target="_blank" rel="noopener noreferrer" onClick={clearForExit}>Switch account</a>{' '}
-      <form method="post" action="/api/auth/logout" onSubmit={clearForExit}><button type="submit">Sign out</button></form>
-    </div>:<main style={{maxWidth:520,margin:'15vh auto',padding:24,fontFamily:'system-ui'}}>
+    {status==='ready'?null:<main style={{maxWidth:520,margin:'15vh auto',padding:24,fontFamily:'system-ui'}}>
       <h1>{status==='checking'?'Checking sign-in…':'Sign in to continue'}</h1>
       {status==='denied'&&<p>This account does not have access. Your existing work stays locked.</p>}
       {status==='unavailable'&&<p>Sign-in is temporarily unavailable. No pending operation will be retried automatically.</p>}
@@ -89,6 +103,6 @@ export default function SessionGate({children}) {
         <form method="post" action="/api/auth/logout" onSubmit={clearForExit}><button type="submit">Sign out</button></form>
       </>}
     </main>}
-    {mounted&&<div key={generation} hidden={status!=='ready'} inert={status!=='ready'?'':undefined} aria-hidden={status!=='ready'?true:undefined}>{children}</div>}
+    {mounted&&<div key={generation} hidden={status!=='ready'} inert={status!=='ready'?'':undefined} aria-hidden={status!=='ready'?true:undefined}><AccountContext.Provider value={clearForExit}>{children}</AccountContext.Provider></div>}
   </>;
 }
