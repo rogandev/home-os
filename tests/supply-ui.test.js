@@ -20,7 +20,7 @@ async function fixture({enabled=true,lostResponse=false,active=true,tracked=true
   const writes=[],reads=[],requests=new Set();let dropped=false;
   const originalFetch=globalThis.fetch;
   globalThis.fetch=async(url,options={})=>{
-    const path=new URL(url).pathname.replace(/^\/home-os/,""),method=options.method || "GET";
+    const path=new URL(url, "https://fixture.invalid").pathname.replace(/^(?:\/api\/data)?\/home-os/,""),method=options.method || "GET";
     const response=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:{"Content-Type":"application/json"}});
     if(method==="GET") {
       reads.push(path);

@@ -1,3 +1,37 @@
 {
-  "rewrites": [{ "source": "/(.*)", "destination": "/" }]
+  "rewrites": [
+    {
+      "source": "/api/auth/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "home.timothyorogan.com"
+        }
+      ],
+      "destination": "https://rogan-session-gateway-production.up.railway.app/home/api/auth/:path*"
+    },
+    {
+      "source": "/api/data/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "home.timothyorogan.com"
+        }
+      ],
+      "destination": "https://rogan-session-gateway-production.up.railway.app/home/api/data/:path*"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api/gateway"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/"
+    }
+  ],
+  "git": {
+    "deploymentEnabled": {
+      "codex/server-session-auth-review": false
+    }
+  }
 }

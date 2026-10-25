@@ -1,3 +1,4 @@
+import { sessionFetch } from "./sessionFetch.js";
 import RazorPanel from "./RazorPanel.jsx";
 import CatalogManager from "./CatalogManager.jsx";
 import { createCatalogAdapter, createIndexedDBCatalogJournal } from "./catalog-adapter.js";
@@ -26,15 +27,17 @@ import { deliveryDatePayload, deliveryStatus, dueDeliveryOrders, expectedDeliver
 import { createOrderMutationGuard, updateExpectedDeliveryDate } from "./order-mutations.js";
 import { createInventoryCopySaver, inventoryCopyDraft, validateInventoryCopy } from "./inventory-copy.js";
 
-const ROGAN_API_URL = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
-const API = ROGAN_API_URL ? `${ROGAN_API_URL}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
-const API_TOKEN = import.meta.env.VITE_ROGAN_API_TOKEN || import.meta.env.VITE_API_TOKEN || "";
+const API = "/api/data/home-os";
+// Retain the existing local journal namespace when transport moves to the gateway.
+// These URL settings are public identifiers only; they never select a request target.
+const JOURNAL_ORIGIN = (import.meta.env.VITE_ROGAN_API_URL || "").replace(/\/+$/, "");
+const JOURNAL_API = JOURNAL_ORIGIN ? `${JOURNAL_ORIGIN}/home-os` : (import.meta.env.VITE_API_URL || "http://localhost:3000/home-os").replace(/\/+$/, "");
 const INVENTORY_COPY = import.meta.env.VITE_HOME_INVENTORY_COPY === "true";
 const CATALOGS_ENABLED = import.meta.env.VITE_HOME_CATALOGS === "true";
 const CATALOG_MANAGEMENT_ENABLED = CATALOGS_ENABLED && import.meta.env.VITE_HOME_CATALOG_MANAGEMENT !== "false";
 let sharedCatalogAdapter;
 function getCatalogAdapter() {
-  if (!sharedCatalogAdapter) sharedCatalogAdapter = createCatalogAdapter({ request: apiFetch, journal: createIndexedDBCatalogJournal(`${API}:home-os-shared-account-v1`), enabled: CATALOGS_ENABLED });
+  if (!sharedCatalogAdapter) sharedCatalogAdapter = createCatalogAdapter({ request: apiFetch, journal: createIndexedDBCatalogJournal(`${JOURNAL_API}:home-os-shared-account-v1`), enabled: CATALOGS_ENABLED });
   return sharedCatalogAdapter;
 }
 
@@ -79,11 +82,11 @@ const REPLENISHMENT_DESCRIPTION = {
 const CAT_COLOR    = { "Skin Care": "#818cf8", "Hair Care": "#06b6d4", "Personal Care": "#f97316", "Cleaning Supplies": "#4ade80" };
 
 async function apiFetch(path, options = {}) {
-  const res = await fetch(`${API}${path}`, {
+  const res = await sessionFetch(`${API}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      ...(API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {}),
+
       ...(options.headers || {}),
     },
   });
