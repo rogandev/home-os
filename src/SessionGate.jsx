@@ -9,7 +9,7 @@ export function AccountControls(){
   const item={display:'block',padding:'10px 12px',color:'inherit',textDecoration:'none',font:'inherit',background:'none',border:0,textAlign:'left',width:'100%',cursor:'pointer'};
   return <details style={{position:'relative',flexShrink:0,font:'12px system-ui',color:'var(--fb-text, #e2e8f0)'}}>
     <summary style={{cursor:'pointer',listStyle:'none',border:'1px solid rgba(129,140,248,.35)',background:'rgba(129,140,248,.12)',borderRadius:7,padding:'8px 10px'}}>Account</summary>
-    <div style={{position:'absolute',right:0,top:'calc(100% + 6px)',minWidth:160,zIndex:50,border:'1px solid rgba(129,140,248,.35)',borderRadius:9,background:'var(--fb-surface, #171722)',boxShadow:'0 8px 24px #0004'}}>
+    <div style={{position:'absolute',right:0,top:'calc(100% + 6px)',minWidth:160,zIndex:50,border:'1px solid rgba(129,140,248,.35)',borderRadius:9,background:'var(--fb-panel, #171722)',boxShadow:'0 8px 24px #0004'}}>
       <a style={item} href="/api/auth/switch" target="_blank" rel="noopener noreferrer" onClick={clearForExit}>Switch account</a>
       <form method="post" action="/api/auth/logout" onSubmit={clearForExit} style={{margin:0}}><button style={item} type="submit">Sign out</button></form>
     </div>
