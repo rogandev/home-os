@@ -119,12 +119,18 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
   });
   app.use(express.json({limit:MAX_BODY}));
   app.use(async(req,res)=> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    const disconnected = () => controller.abort();
+    res.once('close', disconnected);
+    let settle;
+    res.locals.gatewayWorkFinished = new Promise(resolve => { settle = resolve; });
     try {
       const body = req.method === 'GET' || req.body === undefined ? undefined : JSON.stringify(req.body);
       if (body && Buffer.byteLength(body) > MAX_BODY) return res.status(413).json({error:'Request too large.'});
       const response = await fetchImpl(req.upstream, {
         method:req.method, headers:{'Content-Type':'application/json',Accept:'application/json',Authorization:`Bearer ${config.apiToken}`},
-        body, redirect:'error', signal:AbortSignal.timeout(30000),
+        body, redirect:'error', signal:controller.signal,
       });
       // No retry, including on writes whose completion is uncertain.
       if (response.status === 204) return res.status(204).end();
@@ -135,7 +141,13 @@ export function createGateway({ origin, routes, env = process.env, fetchImpl = f
         return res.status(502).json({error:'The data service is unavailable. Refresh and review before retrying a write.'});
       return res.status(response.status).json(data);
     } catch {
+      if (res.destroyed) return;
       return res.status(502).json({error:'The data service is unavailable. Refresh and review before retrying a write.'});
+    } finally {
+      clearTimeout(timeout);
+      res.off('close', disconnected);
+      controller.abort();
+      settle();
     }
   });
   app.use((error,_req,res,_next)=>res.status(error.type === 'entity.too.large' ? 413 : 400).json({error:'Request could not be completed.'}));

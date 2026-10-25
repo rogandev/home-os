@@ -7,6 +7,12 @@ import {sessionFetch,blockSessionRequests} from '../../src/sessionFetch.js';
 const origin='https://kanban.timothyorogan.com';
 const env={AUTH_BASE_URL:origin,AUTH_ISSUER_URL:'https://issuer.example.test/',AUTH_CLIENT_ID:'fixture-client',AUTH_CLIENT_SECRET:'fixture-secret',AUTH_SESSION_SECRET:'s'.repeat(64),AUTH_ALLOWED_SUBJECT:'fixture-owner',ROGAN_API_TOKEN:'fixture-token'};
 const digest=s=>createHash('sha256').update(s).digest('hex');
+test('client disconnect aborts upstream once without replay',async t=>{
+ let entered, aborted; const started=new Promise(r=>entered=r), stopped=new Promise(r=>aborted=r);let calls=0;
+ const base=await fixture(t,async(_url,{signal})=>{calls++;entered();return new Promise((_resolve,reject)=>signal.addEventListener('abort',()=>{aborted();reject(new Error('cancelled'));},{once:true}));});
+ const controller=new AbortController();const request=fetch(base+'/export',{signal:controller.signal}).catch(()=>null);
+ await started;controller.abort();await request;await Promise.race([stopped,new Promise((_r,j)=>setTimeout(()=>j(Error('upstream not cancelled')),1000))]);assert.equal(calls,1);
+});
 async function fixture(t,fetchImpl){
  const app=createGateway({origin,env,routes:[['/boards/fixture/trello-import/apply',['POST']],['/boards/fixture/export',['GET']]],authFactory:()=> (req,res,next)=>{req.oidc={isAuthenticated:()=>true,user:{sub:'fixture-owner'}};next();},fetchImpl});
  const server=app.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(r=>{server.close(r);server.closeAllConnections();}));return `http://127.0.0.1:${server.address().port}/api/data/boards/fixture`;
