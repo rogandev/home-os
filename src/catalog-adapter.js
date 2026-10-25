@@ -1,3 +1,4 @@
+import {mapReads} from './readPool.js';
 // Deliberately not imported by the production entry point. Enable only in fixtures
 // until API PR78 is deployed and verified. request is an injected authenticated
 // JSON transport scoped to /home-os; this module never discovers credentials.
@@ -36,7 +37,7 @@ export function createCatalogAdapter({ request, journal, uuid = () => crypto.ran
         request("/categories"), request("/locations"), request("/items"),
         request("/containers"), request("/orders?status=open"), request("/stats"),
       ]);
-      const allocations = await Promise.all(items.map(item => request(`/items/${encodeURIComponent(item.id)}/stock-allocations`)));
+      const allocations = await mapReads(items, item => request(`/items/${encodeURIComponent(item.id)}/stock-allocations`));
       return { categories, locations, items, containers, orders, stats,
         allocationsByItem: Object.fromEntries(items.map((item, i) => [item.id, allocations[i]])) };
     },
