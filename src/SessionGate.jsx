@@ -1,4 +1,5 @@
 import {createContext,useContext,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
+import './signin.css';
 import {blockSessionRequests} from './sessionFetch.js';
 
 
@@ -90,19 +91,27 @@ export default function SessionGate({children}) {
     return true;
   }
   return <>
-    {status==='ready'?null:<main style={{maxWidth:520,margin:'15vh auto',padding:24,fontFamily:'system-ui'}}>
+    {status==='ready'?null:<main className="signin-shell" aria-label="Home OS sign-in"><section className="signin-card">
+      <div className="signin-brand"><span className="signin-mark" aria-hidden="true">H</span>Home OS</div>
+      <p className="signin-eyebrow">Your private space</p>
       <h1>{status==='checking'?'Checking sign-in…':'Sign in to continue'}</h1>
-      {status==='denied'&&<p>This account does not have access. Your existing work stays locked.</p>}
-      {status==='unavailable'&&<p>Sign-in is temporarily unavailable. No pending operation will be retried automatically.</p>}
-      {mounted&&<p>Unsaved work is held privately in this tab for up to one hour while locked. Sign-in opens another window; keep this tab open. Closing or reloading it loses unsaved drafts.</p>}
-      {discarded&&<p>Unsaved work in this tab was cleared. Saved records and existing recovery journals are unchanged.</p>}
-      {status!=='checking'&&<>
-        <a href="/api/auth/login" target="_blank" rel="noopener noreferrer">Sign in</a>{' '}
-        <button type="button" onClick={check}>Check sign-in</button>{' '}
-        <a href="/api/auth/switch" target="_blank" rel="noopener noreferrer" onClick={clearForExit}>Try another account</a>
-        <form method="post" action="/api/auth/logout" onSubmit={clearForExit}><button type="submit">Sign out</button></form>
+      <p>A little order. A calmer home.</p>
+      {status==='denied'&&<p className="signin-message" role="alert">This account does not have access. Your existing work stays locked.</p>}
+      {status==='unavailable'&&<p className="signin-message" role="alert">Sign-in is temporarily unavailable. No pending operation will be retried automatically.</p>}
+      {mounted&&<p className="signin-message">Unsaved work is held privately in this tab for up to one hour while locked. Keep this tab open; closing or reloading it loses unsaved drafts.</p>}
+      {discarded&&<p className="signin-message">Unsaved work in this tab was cleared. Saved records and existing recovery journals are unchanged.</p>}
+      {status==='checking'?<p className="signin-loading" role="status">Connecting to your account</p>:<>
+        <div className="signin-actions">
+          <a className="signin-primary" href="/api/auth/login" target="_blank" rel="noopener noreferrer">Sign in</a>
+          <button className="signin-secondary" type="button" onClick={check}>Check sign-in</button>
+        </div>
+        <p className="signin-note">Sign-in opens separately. Return here when finished. If you cancel, you can try again whenever you’re ready.</p>
+        <div className="signin-links">
+          <a href="/api/auth/switch" target="_blank" rel="noopener noreferrer" onClick={clearForExit}>Try another account</a>
+          <form method="post" action="/api/auth/logout" onSubmit={clearForExit}><button type="submit">Sign out</button></form>
+        </div>
       </>}
-    </main>}
+    </section></main>}
     {mounted&&<div key={generation} hidden={status!=='ready'} inert={status!=='ready'?'':undefined} aria-hidden={status!=='ready'?true:undefined}><AccountContext.Provider value={clearForExit}>{children}</AccountContext.Provider></div>}
   </>;
 }

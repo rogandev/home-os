@@ -1,0 +1,27 @@
+body:has(.signin-shell){margin:0;background:#101019}
+/* Scoped to the locked entry screen; never changes the signed-in application. */
+.signin-shell{--signin-accent:#c4b5fd;box-sizing:border-box;min-height:100svh;display:grid;place-items:center;padding:clamp(24px,6vw,72px) max(20px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));background:radial-gradient(ellipse at 50% 0%,#242039 0%,#101019 62%);color:#f4f3fa;font:400 16px/1.6 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:left;color-scheme:dark}
+.signin-shell *{box-sizing:border-box}
+.signin-shell .signin-card{width:100%;max-width:460px;padding:clamp(24px,5vw,40px);border:1px solid #3d384f;border-radius:24px;background:#191822;box-shadow:0 24px 70px #0003}
+.signin-shell .signin-brand{display:flex;align-items:center;gap:12px;margin-bottom:36px;color:#e9e4ff;font-size:14px;font-weight:650;letter-spacing:.04em}
+.signin-shell .signin-mark{display:grid;place-items:center;width:40px;height:40px;border:1px solid #605679;border-radius:12px;background:#30283f;color:var(--signin-accent);font-size:18px;font-weight:700;letter-spacing:-.04em}
+.signin-shell .signin-eyebrow{margin:0 0 10px;color:var(--signin-accent);font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase}
+.signin-shell h1{margin:0 0 14px;color:#f4f3fa;font-size:clamp(28px,5vw,36px);font-weight:650;line-height:1.15;letter-spacing:-.035em}
+.signin-shell p{margin:0 0 20px;color:#bab7c9;font-size:14px;line-height:1.65}
+.signin-shell .signin-actions{display:grid;gap:12px;margin-top:28px}
+.signin-shell a,.signin-shell button{font:inherit;letter-spacing:normal;cursor:pointer;touch-action:manipulation}
+.signin-shell .signin-primary,.signin-shell .signin-secondary{display:flex;align-items:center;justify-content:center;width:100%;min-height:48px;margin:0;padding:12px 16px;border-radius:12px;font-size:14px;font-weight:650;text-align:center;text-decoration:none;line-height:1.5;white-space:normal}
+.signin-shell .signin-primary{background:var(--signin-accent);border:1px solid var(--signin-accent);color:#20172e}
+.signin-shell .signin-secondary{background:#24212f;border:1px solid #575063;color:#ede9f7}
+.signin-shell .signin-primary:hover{filter:brightness(1.07)}
+.signin-shell .signin-secondary:hover{background:#302a3e}
+.signin-shell :is(a,button):focus-visible{outline:3px solid #eee7ff;outline-offset:4px}
+.signin-shell .signin-links{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px 16px;margin-top:18px;padding-top:16px;border-top:1px solid #393344}
+.signin-shell .signin-links form{margin:0}
+.signin-shell .signin-links :is(a,button){display:inline-flex;align-items:center;min-height:44px;margin:0;padding:6px 0;border:0;border-radius:0;background:transparent;color:#c5bcd9;font-size:12px;text-decoration:underline;text-underline-offset:4px}
+.signin-shell .signin-note{margin:20px 0 0;font-size:12px;color:#a9a3b9}
+.signin-shell .signin-message{padding:14px 16px;border:1px solid #615471;border-radius:12px;background:#292233;color:#e5d8f1}
+.signin-shell .signin-loading{display:flex;align-items:center;gap:10px;margin:24px 0 0}
+.signin-shell .signin-loading::before{content:"";width:8px;height:8px;flex:none;border-radius:50%;background:var(--signin-accent)}
+@media(max-width:420px){.signin-shell{place-items:start center;padding-top:max(32px,env(safe-area-inset-top))}.signin-shell .signin-card{padding:24px 22px;border-radius:20px}.signin-shell .signin-brand{margin-bottom:30px}}
+@media(prefers-reduced-motion:reduce){.signin-shell *{scroll-behavior:auto}}
