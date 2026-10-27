@@ -1,3 +1,4 @@
+body:has(.signin-shell){margin:0;background:#101019}
 /* Scoped to the locked entry screen; never changes the signed-in application. */
 .signin-shell{--signin-accent:#c4b5fd;box-sizing:border-box;min-height:100svh;display:grid;place-items:center;padding:clamp(24px,6vw,72px) max(20px,env(safe-area-inset-right)) max(24px,env(safe-area-inset-bottom)) max(20px,env(safe-area-inset-left));background:radial-gradient(ellipse at 50% 0%,#242039 0%,#101019 62%);color:#f4f3fa;font:400 16px/1.6 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:left;color-scheme:dark}
 .signin-shell *{box-sizing:border-box}
