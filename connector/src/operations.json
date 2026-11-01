@@ -1270,6 +1270,13 @@
             "expectedVersion": {
               "type": "integer",
               "minimum": 0
+            },
+            "nextDeliveryOrderId": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
             }
           },
           "required": [
@@ -1354,6 +1361,13 @@
             "expectedVersion": {
               "type": "integer",
               "minimum": 0
+            },
+            "nextDeliveryOrderId": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
             }
           },
           "required": [
@@ -1500,10 +1514,15 @@
               "type": "string",
               "maxLength": 4000
             }
-          }
+          },
+          "required": [
+            "today"
+          ]
         }
       },
-      "required": []
+      "required": [
+        "query"
+      ]
     }
   },
   {
