@@ -7,13 +7,25 @@ permissions:
 jobs:
   home-mcp-and-app:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm ci --prefix connector
+      - run: npm test
+      - run: npm run build
+      - run: npm --prefix connector run check
+  home-mcp-node20:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
       - run: npm ci --prefix connector
-      - run: npm test
-      - run: npm run build
+      - run: npm --prefix connector test
       - run: npm --prefix connector run check
