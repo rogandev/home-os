@@ -1,0 +1,12 @@
+import {createBackend} from './backend.js';
+import {createVerifier} from './oauth.js';
+import {createHttpServer} from './http.js';
+const env=process.env;
+if(env.HOME_MCP_ENABLED!=='true')throw new Error('Home MCP is disabled; activation requires specific approval');
+const readerToken=env.HOME_MCP_READER_TOKEN,writerToken=env.HOME_MCP_WRITER_TOKEN;
+const forbidden=Object.entries(env).filter(([k])=>/TOKEN|SECRET|BEARER/i.test(k)&&!['HOME_MCP_READER_TOKEN','HOME_MCP_WRITER_TOKEN'].includes(k)).map(([,v])=>v).filter(Boolean);
+if(forbidden.includes(readerToken)||writerToken&&forbidden.includes(writerToken))throw new Error('Existing application and Flowboard credentials cannot be reused');
+const config={issuerUrl:env.HOME_MCP_ISSUER,resourceUrl:env.HOME_MCP_RESOURCE,jwksUrl:env.HOME_MCP_JWKS,allowedSubject:env.HOME_MCP_OWNER_SUBJECT};
+const request=createBackend({origin:env.HOME_MCP_API_ORIGIN,readerToken,writerToken});
+const server=createHttpServer({...config,request,verifyToken:createVerifier(config),writeEnabled:Boolean(writerToken)});
+server.listen(Number(env.PORT??3000),'0.0.0.0',()=>console.log('Home MCP listening'));
